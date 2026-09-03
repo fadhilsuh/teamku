@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: movon, POSTGRES_USER: movon, POSTGRES_PASSWORD: movon}
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U movon -d movon"], interval: 5s, timeout: 3s, retries: 10}
+  redis:
+    image: redis:7-alpine
+    healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
+  api:
+    build: ../../apps/api
+    command: uvicorn movon_hr.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    environment: {MOVON_CORS_ORIGINS: '["http://localhost:3000"]'}
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+  web:
+    build: ../../apps/web
+    ports: ["3000:3000"]
+    environment: {NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1}
+    depends_on: [api]
