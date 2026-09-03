@@ -10,7 +10,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token"],
+    allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Demo-User"],
 )
 app.include_router(router, prefix="/api/v1")
 
