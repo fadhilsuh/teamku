@@ -3,7 +3,7 @@ import {FormEvent,useState} from "react";
 import {useRouter} from "next/navigation";
 import {api} from "../../lib/api";
 
-const accounts=[{label:"HR Admin",email:"hr@movon.test"},{label:"Manager",email:"manager@movon.test"},{label:"Employee",email:"employee@movon.test"}];
+const accounts=[{label:"HR Admin",email:"hr@movon.test"},{label:"Manager",email:"manager@movon.test"},{label:"Employee",email:"employee@movon.test"},{label:"Fresh check-in",email:"fresh@movon.test"}];
 
 export default function Login(){
   const [email,setEmail]=useState("employee@movon.test"),[password,setPassword]=useState("Demo123!"),[error,setError]=useState(""),[busy,setBusy]=useState(false);

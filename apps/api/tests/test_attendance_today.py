@@ -16,6 +16,43 @@ def employee_headers() -> dict[str, str]:
     return {"X-Demo-User": response.json()["access_token"]}
 
 
+def fresh_employee_headers() -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "fresh@movon.test", "password": "Demo123!"},
+    )
+    return {"X-Demo-User": response.json()["access_token"]}
+
+
+def test_fresh_demo_account_starts_without_a_check_in() -> None:
+    reset_demo_store()
+
+    response = client.get("/api/v1/attendance/today", headers=fresh_employee_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"state": "not_checked_in", "session": None}
+
+
+def test_check_in_requires_location_sharing_approval() -> None:
+    reset_demo_store()
+
+    response = client.post(
+        "/api/v1/attendance/check-in",
+        headers=fresh_employee_headers() | {"Idempotency-Key": "location-consent-test"},
+        json={
+            "latitude": -6.2,
+            "longitude": 106.8166,
+            "accuracy_meters": 10,
+            "selfie_captured": True,
+            "location_share_approved": False,
+            "agenda": [{"title": "Konfirmasi lokasi"}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "persetujuan" in response.json()["detail"].lower()
+
+
 def test_today_returns_active_session_instead_of_offering_second_check_in() -> None:
     reset_demo_store()
     record = Attendance(
@@ -58,6 +95,7 @@ def test_check_in_rejects_an_open_session_from_a_prior_day() -> None:
             "longitude": 106.8166,
             "accuracy_meters": 10,
             "selfie_captured": True,
+            "location_share_approved": True,
             "agenda": [{"title": "Agenda baru"}],
         },
     )

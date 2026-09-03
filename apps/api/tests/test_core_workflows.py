@@ -145,7 +145,7 @@ def test_manager_cannot_approve_a_request_outside_their_department() -> None:
 def test_suspended_employee_is_removed_from_all_dashboard_counts() -> None:
     hr_headers = headers("e-hr")
     before = client.get("/api/v1/dashboard", headers=hr_headers).json()
-    assert before["headcount"] == 18
+    assert before["headcount"] == 19
     assert before["present"] == 7
 
     response = client.patch(
@@ -156,7 +156,7 @@ def test_suspended_employee_is_removed_from_all_dashboard_counts() -> None:
     assert response.status_code == 200
 
     after = client.get("/api/v1/dashboard", headers=hr_headers).json()
-    assert after["headcount"] == 17
+    assert after["headcount"] == 18
     assert after["present"] == 6
 
 

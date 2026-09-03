@@ -100,6 +100,7 @@ def reset_demo_store() -> None:
         ("e-hr", "Nadia Putri", "hr@movon.test", "hr_admin", "Human Resources", "HR Lead", 12_000_000),
         ("e-manager", "Raka Pratama", "manager@movon.test", "manager", "Engineering", "Engineering Manager", 15_000_000),
         ("e-employee", "Sinta Lestari", "employee@movon.test", "employee", "Engineering", "Frontend Engineer", 8_000_000),
+        ("e-fresh", "Rani Prasetyo", "fresh@movon.test", "employee", "Engineering", "QA Tester", 8_000_000),
         ("e-004", "Andi Gunawan", "andi@movon.test", "employee", "Product", "Product Designer", 9_000_000),
         ("e-005", "Rizky Pranata", "rizky@movon.test", "employee", "Sales", "Sales Lead", 11_000_000),
         ("e-006", "Budi Santoso", "budi@movon.test", "employee", "Operations", "Logistics Staff", 7_000_000),
@@ -269,6 +270,7 @@ class CheckIn(BaseModel):
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float = Field(ge=0, le=10_000)
     selfie_captured: bool
+    location_share_approved: bool
     agenda: list[dict] = Field(min_length=1, max_length=5)
 
 
@@ -458,6 +460,8 @@ async def check_in(
         raise HTTPException(409, "Anda masih memiliki sesi kehadiran yang terbuka")
     if not payload.selfie_captured:
         raise HTTPException(422, "Selfie kamera langsung wajib untuk kebijakan ini")
+    if not payload.location_share_approved:
+        raise HTTPException(422, "Persetujuan berbagi lokasi diperlukan untuk check-in")
     distance = haversine_meters(payload.latitude, payload.longitude, -6.2, 106.8166)
     anomaly = (
         "outside_geofence"
