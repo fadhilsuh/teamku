@@ -16,7 +16,9 @@ Demo credentials: `hr@movon.test` / `Demo123!`, `manager@movon.test` / `Demo123!
 
 The web app only renders UI and calls `/api/v1`; authorization, calculation, validation, audit events, and persistence belong to the Python API. PostgreSQL is the supported production database. The in-memory repository is deliberately a development/demo adapter, not a production path.
 
-Implemented vertical slice: authenticated role-aware dashboard; employee directory; camera/location attendance with server-side Haversine validation, idempotency and agenda; leave request submission/approval; and a decimal-safe payroll run calculation/publish flow. The API returns a clear `501` for future modules instead of pretending they are complete.
+Implemented demo vertical slices: authenticated role-aware dashboards; searchable employee directory with HR create/status actions; camera/location attendance with server-side Haversine validation, idempotency and agenda; leave request history, balance impact, cancellation and manager/HR decisions; in-app notifications; and a decimal-safe payroll calculation, finalization, locking and publishing flow.
+
+The local demo repository is intentionally in-memory, so data resets whenever the API process restarts. It is useful for evaluating the complete UI workflows but is not the production persistence adapter described in the architecture documents.
 
 Attendance is browser verification, not liveness or anti-spoofing. A selfie is captured from the live camera (never uploaded from a gallery), location accuracy is recorded, and out-of-range/low-confidence results are review signals.
 

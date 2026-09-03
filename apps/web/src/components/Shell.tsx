@@ -1,8 +1,91 @@
 "use client";
+
 import Link from "next/link";
-import {useEffect, useState} from "react";
 import {usePathname, useRouter} from "next/navigation";
+import {useEffect, useMemo, useState} from "react";
+import {api} from "../lib/api";
 import {Icon} from "./Icon";
-const primary=[["Dashboard","/app/overview","grid"],["Kehadiran","/app/attendance/today","clock"],["Agenda & Cuti","/app/time/time-off","calendar"],["Karyawan","/app/people","users"]] as const;
-const operations=[["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"]] as const;
-export function Shell({children}:{children:React.ReactNode}){const pathname=usePathname();const router=useRouter();const [sessionReady,setSessionReady]=useState(false);useEffect(()=>{if(!localStorage.getItem("movon_user")){router.replace("/login");return}setSessionReady(true)},[router]);const logout=()=>{localStorage.removeItem("movon_user");router.replace("/login");router.refresh()};const links=(items:typeof primary|typeof operations)=>items.map(([label,href,icon])=><Link className={pathname.startsWith(href)?"nav-link active":"nav-link"} key={href} href={href}><Icon name={icon}/><span>{label}</span></Link>);if(!sessionReady)return null;return <div className="app-frame"><aside className="sidebar"><Link className="sidebar-brand" href="/app/overview"><span>MOVON</span><small>PEOPLE OS</small></Link><div className="sidebar-section"><p>Workspace</p>{links(primary)}</div><div className="sidebar-section"><p>Operations</p>{links(operations)}</div><div className="sidebar-callout"><span className="callout-icon"><Icon name="spark"/></span><b>Movon Intelligence</b><small>Insight tim, tanpa spreadsheet.</small><button>Pelajari fitur</button></div><div className="user-panel"><span className="avatar">SL</span><span><b>Sinta Lestari</b><small>Employee</small></span><button className="logout-button" type="button" onClick={logout} aria-label="Keluar" title="Keluar"><Icon name="logout" size={17}/></button></div></aside><div className="app-workspace"><header className="app-topbar"><button className="mobile-menu" aria-label="Buka navigasi"><Icon name="menu"/></button><div className="workspace-name"><b>PT Movon Solusi Kreatif</b><span>Jakarta HQ</span></div><div className="topbar-actions"><button className="search-button"><Icon name="search"/><span>Cari karyawan atau menu</span><kbd>⌘ K</kbd></button><button className="icon-button" aria-label="Notifikasi"><Icon name="bell"/><i/></button><button className="icon-button mobile-logout" type="button" onClick={logout} aria-label="Keluar" title="Keluar"><Icon name="logout"/></button><span className="top-avatar">SL</span></div></header><main className="content">{children}</main><nav className="mobile-nav">{links(primary)}</nav></div></div>}
+
+type Role = "employee" | "manager" | "hr_admin";
+type User = {id:string;name:string;email:string;role:Role;department:string;title:string};
+type Notification = {id:string;title:string;detail:string;target:string;read:boolean};
+type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"];
+
+const workspace: NavItem[] = [
+  ["Dashboard","/app/overview","grid"],
+  ["Kehadiran","/app/attendance/today","clock"],
+  ["Agenda & Cuti","/app/time/time-off","calendar"],
+];
+
+export function Shell({children}:{children:React.ReactNode}) {
+  const pathname=usePathname();
+  const router=useRouter();
+  const [user,setUser]=useState<User>();
+  const [notifications,setNotifications]=useState<Notification[]>([]);
+  const [menuOpen,setMenuOpen]=useState(false);
+  const [bootstrapError,setBootstrapError]=useState("");
+  const [bootstrapAttempt,setBootstrapAttempt]=useState(0);
+  const [searchOpen,setSearchOpen]=useState(false);
+  const [notificationsOpen,setNotificationsOpen]=useState(false);
+  const [intelligenceOpen,setIntelligenceOpen]=useState(false);
+
+  useEffect(()=>{
+    const token=localStorage.getItem("movon_user");
+    if(!token){router.replace("/login");return}
+    setBootstrapError("");
+    api<{user:User}>("/me",{},token).then(profile=>setUser(profile.user)).catch(reason=>setBootstrapError(reason instanceof Error?reason.message:"Workspace gagal dimuat."));
+    api<{items:Notification[]}>("/notifications",{},token).then(inbox=>setNotifications(inbox.items)).catch(()=>setNotifications([]));
+  },[router,bootstrapAttempt]);
+
+  const nav=useMemo(()=>{
+    if(!user)return workspace;
+    const items=[...workspace];
+    if(user.role!=="employee")items.push(["Karyawan","/app/people","users"]);
+    return items;
+  },[user]);
+  const operations=useMemo<NavItem[]>(()=>{
+    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"]];
+    if(user?.role==="manager")return [["Persetujuan","/app/approvals","check"],["Slip Gaji","/app/payroll/payslips","wallet"]];
+    return [["Slip Gaji","/app/payroll/payslips","wallet"]];
+  },[user]);
+  const initials=user?.name.split(" ").map(part=>part[0]).slice(0,2).join("")||"--";
+  const roleLabel=user?.role==="hr_admin"?"HR Admin":user?.role==="manager"?"Manager":"Employee";
+  const unread=notifications.filter(item=>!item.read).length;
+  const allNav=[...nav,...operations];
+
+  const logout=async()=>{const token=localStorage.getItem("movon_user")||undefined;try{if(token)await api("/auth/logout",{method:"POST"},token)}catch{}finally{localStorage.removeItem("movon_user");router.replace("/login");router.refresh()}};
+  const markRead=async()=>{
+    const token=localStorage.getItem("movon_user")||undefined;
+    await api("/notifications/read-all",{method:"POST"},token);
+    setNotifications(items=>items.map(item=>({...item,read:true})));
+  };
+  const links=(items:NavItem[])=>items.map(([label,href,icon])=><Link onClick={()=>setMenuOpen(false)} className={pathname.startsWith(href)?"nav-link active":"nav-link"} key={href} href={href}><Icon name={icon}/><span>{label}</span></Link>);
+
+  if(!user)return bootstrapError?<div className="session-recovery"><b>Workspace belum dapat dimuat</b><p>{bootstrapError}</p><div><button onClick={()=>setBootstrapAttempt(value=>value+1)}>Coba lagi</button><button onClick={logout}>Kembali ke login</button></div></div>:<div className="session-loader"><span/>Memuat workspace…</div>;
+  return <div className="app-frame">
+    {menuOpen&&<button className="sidebar-backdrop" aria-label="Tutup navigasi" onClick={()=>setMenuOpen(false)}/>}
+    <aside className={menuOpen?"sidebar open":"sidebar"}>
+      <Link className="sidebar-brand" href="/app/overview"><span>MOVON</span><small>PEOPLE OS</small></Link>
+      <div className="sidebar-section"><p>Workspace</p>{links(nav)}</div>
+      {operations.length>0&&<div className="sidebar-section"><p>Operations</p>{links(operations)}</div>}
+      <div className={intelligenceOpen?"sidebar-callout expanded":"sidebar-callout"}><span className="callout-icon"><Icon name="spark"/></span><b>Movon Intelligence</b><small>{intelligenceOpen?"Ringkasan operasional berasal dari data kehadiran, cuti, dan payroll di workspace ini.":"Insight tim, tanpa spreadsheet."}</small><button type="button" onClick={()=>setIntelligenceOpen(value=>!value)}>{intelligenceOpen?"Tutup penjelasan":"Pelajari fitur"}</button></div>
+      <div className="user-panel"><span className="avatar">{initials}</span><span><b>{user.name}</b><small>{roleLabel}</small></span><button className="logout-button" type="button" onClick={logout} aria-label="Keluar" title="Keluar"><Icon name="logout" size={17}/></button></div>
+    </aside>
+    <div className="app-workspace">
+      <header className="app-topbar">
+        <button className="mobile-menu" onClick={()=>setMenuOpen(true)} aria-label="Buka navigasi"><Icon name="menu"/></button>
+        <div className="workspace-name"><b>PT Movon Solusi Kreatif</b><span>{user.department} · Jakarta HQ</span></div>
+        <div className="topbar-actions">
+          <button className="search-button" onClick={()=>setSearchOpen(value=>!value)} aria-expanded={searchOpen}><Icon name="search"/><span>Cari karyawan atau menu</span><kbd>⌘ K</kbd></button>
+          <button className="icon-button" onClick={()=>setNotificationsOpen(value=>!value)} aria-label={`Notifikasi, ${unread} belum dibaca`} aria-expanded={notificationsOpen}><Icon name="bell"/>{unread>0&&<i/>}</button>
+          <button className="icon-button mobile-logout" type="button" onClick={logout} aria-label="Keluar" title="Keluar"><Icon name="logout"/></button>
+          <span className="top-avatar">{initials}</span>
+        </div>
+        {searchOpen&&<div className="topbar-popover search-popover"><b>Pindah cepat</b>{allNav.map(([label,href,icon])=><Link href={href} key={href} onClick={()=>setSearchOpen(false)}><Icon name={icon}/><span>{label}</span></Link>)}</div>}
+        {notificationsOpen&&<div className="topbar-popover notification-popover"><div className="popover-head"><b>Notifikasi</b>{unread>0&&<button onClick={markRead}>Tandai dibaca</button>}</div>{notifications.length?notifications.map(item=><Link className={item.read?"notification-item":"notification-item unread"} href={item.target} key={item.id} onClick={()=>setNotificationsOpen(false)}><b>{item.title}</b><small>{item.detail}</small></Link>):<p className="popover-empty">Tidak ada notifikasi baru.</p>}</div>}
+      </header>
+      <main className="content">{children}</main>
+      <nav className="mobile-nav">{links(nav.slice(0,4))}</nav>
+    </div>
+  </div>;
+}
