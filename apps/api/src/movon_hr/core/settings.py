@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # persisted to PostgreSQL and reloaded on startup. When unset the API falls
     # back to the ephemeral in-memory demo store.
     database_url: str | None = None
+    app_base_url: str = "http://localhost:3000"
+    session_cookie_name: str = "teamku_session"
+    session_cookie_secure: bool = False
 
 
 settings = Settings()

@@ -33,10 +33,12 @@ export function Shell({children}:{children:React.ReactNode}) {
   const [signingOut,setSigningOut]=useState(false);
 
   useEffect(()=>{
-    const token=localStorage.getItem("movon_user");
-    if(!token){router.replace("/login");return}
+    const token=localStorage.getItem("movon_user")||undefined;
     setBootstrapError("");
-    api<{user:User}>("/me",{},token).then(profile=>setUser(profile.user)).catch(reason=>setBootstrapError(reason instanceof Error?reason.message:"Workspace gagal dimuat."));
+    api<{user:User}>("/me",{},token).then(profile=>setUser(profile.user)).catch(reason=>{
+      if(!token){router.replace("/login");return}
+      setBootstrapError(reason instanceof Error?reason.message:"Workspace gagal dimuat.");
+    });
     api<{items:Notification[]}>("/notifications",{},token).then(inbox=>setNotifications(inbox.items)).catch(()=>setNotifications([]));
   },[router,bootstrapAttempt]);
 

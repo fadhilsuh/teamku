@@ -4,6 +4,7 @@ import {useRouter} from "next/navigation";
 import {api} from "../../lib/api";
 import {waitForAuthTransition} from "../../lib/transition";
 import {AuthTransition} from "../../components/AuthTransition";
+import {AuthLink, AuthLinks} from "../../components/AuthShell";
 import {NotificationDialog,NotificationDialogState} from "../../components/NotificationDialog";
 
 const accounts=[{label:"HR Admin",email:"hr@movon.test"},{label:"Manager",email:"manager@movon.test"},{label:"Employee",email:"employee@movon.test"},{label:"Fresh check-in",email:"fresh@movon.test"}];
@@ -42,6 +43,11 @@ export default function Login(){
             <label>Kata sandi<input disabled={busy} type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password"/></label>
             <button disabled={busy} type="submit">{busy?"Memverifikasi…":"Masuk ke Teamku →"}</button>
           </form>
+          <AuthLinks>
+            <AuthLink href="/forgot-password">Lupa kata sandi</AuthLink>
+            <span>·</span>
+            <AuthLink href="/signup">Buat workspace perusahaan</AuthLink>
+          </AuthLinks>
           <div className="login-demo">
             <b>Pilih akun demo</b>
             <div>{accounts.map(account=><button disabled={busy} type="button" className={email===account.email?"active":""} onClick={()=>{setEmail(account.email);setPassword("Demo123!")}} key={account.email}>{account.label}</button>)}</div>

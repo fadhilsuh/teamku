@@ -10,4 +10,4 @@ Worker[Celery worker] --> PG
 Worker --> Storage
 ```
 
-Production repositories implement tenant-scoped SQLAlchemy persistence, with every mutation inside a unit of work and audit/outbox record. API routers remain thin; attendance, requests, approvals, and payroll calculations are application use cases with pure domain rules.
+Every company is a tenant with its own in-memory store and `tenant_id` on every persisted row. Signup creates a tenant; login, invites, and password resets bind the request to that tenant before any read or write. Alembic owns the schema (`apps/api/alembic`); the API still calls `create_all` for empty local databases.
