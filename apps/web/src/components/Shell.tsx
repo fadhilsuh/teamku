@@ -10,6 +10,8 @@ import {Icon} from "./Icon";
 
 type Role = "employee" | "manager" | "hr_admin";
 type User = {id:string;name:string;email:string;role:Role;department:string;title:string};
+type Tenant = {id:string;name:string;slug:string};
+type Office = {name:string};
 type Notification = {id:string;title:string;detail:string;target:string;read:boolean};
 type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"|"pin"];
 
@@ -23,6 +25,8 @@ export function Shell({children}:{children:React.ReactNode}) {
   const pathname=usePathname();
   const router=useRouter();
   const [user,setUser]=useState<User>();
+  const [tenant,setTenant]=useState<Tenant>();
+  const [officeName,setOfficeName]=useState("Kantor");
   const [notifications,setNotifications]=useState<Notification[]>([]);
   const [menuOpen,setMenuOpen]=useState(false);
   const [bootstrapError,setBootstrapError]=useState("");
@@ -35,11 +39,15 @@ export function Shell({children}:{children:React.ReactNode}) {
   useEffect(()=>{
     const token=localStorage.getItem("movon_user")||undefined;
     setBootstrapError("");
-    api<{user:User}>("/me",{},token).then(profile=>setUser(profile.user)).catch(reason=>{
+    api<{user:User;tenant:Tenant}>("/me",{},token).then(profile=>{
+      setUser(profile.user);
+      setTenant(profile.tenant);
+    }).catch(reason=>{
       if(!token){router.replace("/login");return}
       setBootstrapError(reason instanceof Error?reason.message:"Workspace gagal dimuat.");
     });
     api<{items:Notification[]}>("/notifications",{},token).then(inbox=>setNotifications(inbox.items)).catch(()=>setNotifications([]));
+    api<Office>("/settings/office",{},token).then(office=>setOfficeName(office.name)).catch(()=>setOfficeName("Kantor"));
   },[router,bootstrapAttempt]);
 
   const nav=useMemo(()=>{
@@ -93,7 +101,7 @@ export function Shell({children}:{children:React.ReactNode}) {
     <div className="app-workspace">
       <header className="app-topbar">
         <button className="mobile-menu" onClick={()=>setMenuOpen(true)} aria-label="Buka navigasi"><Icon name="menu"/></button>
-        <div className="workspace-name"><b>PT Movon Solusi Kreatif</b><span>{user.department} · Jakarta HQ</span></div>
+        <div className="workspace-name"><b>{tenant?.name||"Teamku"}</b><span>{user.department} · {officeName}</span></div>
         <div className="topbar-actions">
           <button className="search-button" onClick={()=>setSearchOpen(value=>!value)} aria-expanded={searchOpen}><Icon name="search"/><span>Cari karyawan atau menu</span><kbd>⌘ K</kbd></button>
           <button className="icon-button" onClick={()=>setNotificationsOpen(value=>!value)} aria-label={`Notifikasi, ${unread} belum dibaca`} aria-expanded={notificationsOpen}><Icon name="bell"/>{unread>0&&<i/>}</button>

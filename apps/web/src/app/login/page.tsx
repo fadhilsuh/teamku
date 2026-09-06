@@ -32,7 +32,6 @@ export default function Login(){
       <section className="login-art">
         <div className="login-logo">Teamku</div>
         <div><p className="eyebrow" style={{color:"#fff"}}>powered by movon digital house</p><h1>Presence with purpose.</h1><p>Kelola kehadiran, agenda harian, dan keputusan tim dalam satu ruang kerja yang tenang dan jelas.</p></div>
-        <p>powered by movon digital house · Jakarta, Indonesia</p>
       </section>
       <section className="login-form-wrap">
         <div className="login-form">

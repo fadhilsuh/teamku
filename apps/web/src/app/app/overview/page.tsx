@@ -9,29 +9,33 @@ type Attendance={checked_in_at:string;checked_out_at?:string;anomaly?:string};
 type Dashboard={current_user:{name:string;role:string};headcount:number;present:number;late:number;pending_approvals:number;agenda_total:number;agenda_completed:number;attendance:Attendance[]};
 type Leave={items:{status:string}[];balance:{remaining_days:number}};
 type Payslip={period:string;published_at:string};
+type Office={name:string};
 const auth=()=>localStorage.getItem("movon_user")||undefined;
 
 export default function Overview(){
   const [data,setData]=useState<Dashboard>();
   const [leave,setLeave]=useState<Leave>();
   const [payslip,setPayslip]=useState<Payslip>();
+  const [officeName,setOfficeName]=useState("Kantor");
   const [notification,setNotification]=useState<NotificationDialogState|null>(null);
   const load=async()=>{
     try{
       const dashboard=await api<Dashboard>("/dashboard",{},auth());
       setData(dashboard);
-      const [leaveResult,payslipResult]=await Promise.all([
+      const [leaveResult,payslipResult,officeResult]=await Promise.all([
         api<Leave>("/leave-requests",{},auth()).catch(()=>undefined),
         api<{items:Payslip[]}>("/payroll/payslips",{},auth()).catch(()=>undefined),
+        api<Office>("/settings/office",{},auth()).catch(()=>undefined),
       ]);
       setLeave(leaveResult);setPayslip(payslipResult?.items[0]);
+      if(officeResult?.name)setOfficeName(officeResult.name);
     }catch(reason){setNotification({type:"error",title:"Beranda belum dapat dimuat",message:reason instanceof Error?reason.message:"Beranda belum dapat dimuat."})}
   };
   useEffect(()=>{load()},[]);
-  return <>{data?<Home data={data} leave={leave} payslip={payslip}/>:<HomeLoading/>}<NotificationDialog notification={notification} onClose={()=>setNotification(null)}/></>;
+  return <>{data?<Home data={data} leave={leave} payslip={payslip} officeName={officeName}/>:<HomeLoading/>}<NotificationDialog notification={notification} onClose={()=>setNotification(null)}/></>;
 }
 
-function Home({data,leave,payslip}:{data:Dashboard;leave:Leave|undefined;payslip:Payslip|undefined}){
+function Home({data,leave,payslip,officeName}:{data:Dashboard;leave:Leave|undefined;payslip:Payslip|undefined;officeName:string}){
   const attendance=data.attendance[0];
   const checkedIn=Boolean(attendance&&!attendance.checked_out_at);
   const finished=Boolean(attendance?.checked_out_at);
@@ -51,7 +55,7 @@ function Home({data,leave,payslip}:{data:Dashboard;leave:Leave|undefined;payslip
     <div className="home-primary-grid">
       <article className="home-card attendance-card">
         <div className="home-card-head"><div><span className="home-icon red">◷</span><h2>{isEmployee?"Kehadiran hari ini":"Kehadiran tim hari ini"}</h2></div><span className="home-time"><i/>{checkedIn?time(attendance!.checked_in_at):"09:00 WIB"}</span></div>
-        <div className="attendance-summary"><div><b className={checkedIn?"attendance-ok":"attendance-pending"}>{isEmployee?attendanceLabel:`${data.present} dari ${data.headcount} hadir`}</b><dl><div><dt>◷ Shift</dt><dd>09.00 – 18.00 WIB</dd></div><div><dt>⌂ Lokasi kerja</dt><dd>Jakarta HQ</dd></div><div><dt>⌖ Lokasi</dt><dd>{checkedIn?"Terverifikasi saat check-in":"Diverifikasi saat check-in"}</dd></div></dl></div><Clock/></div>
+        <div className="attendance-summary"><div><b className={checkedIn?"attendance-ok":"attendance-pending"}>{isEmployee?attendanceLabel:`${data.present} dari ${data.headcount} hadir`}</b><dl><div><dt>◷ Shift</dt><dd>09.00 – 18.00 WIB</dd></div><div><dt>⌂ Lokasi kerja</dt><dd>{officeName}</dd></div><div><dt>⌖ Lokasi</dt><dd>{checkedIn?"Terverifikasi saat check-in":"Diverifikasi saat check-in"}</dd></div></dl></div><Clock/></div>
         <Link className="home-primary-button" href="/app/attendance/today">◉ {checkedIn?"Buka presensi":"Mulai check-in"}</Link>
       </article>
 

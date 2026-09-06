@@ -747,6 +747,7 @@ async def signup(payload: Signup) -> JSONResponse:
         tenant_id=tenant_id,
         tenant_name=payload.company_name.strip(),
         tenant_slug=requested_slug,
+        office=OfficeLocation(name="Kantor Pusat"),
     )
     put_store(company)
     bind_tenant(tenant_id)
