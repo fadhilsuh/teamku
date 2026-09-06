@@ -1,4 +1,4 @@
-"""Functional Movon HR vertical slices backed by a deterministic demo repository."""
+"""Functional Teamku vertical slices backed by a deterministic demo repository."""
 
 from __future__ import annotations
 
@@ -6,7 +6,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from math import asin, cos, radians, sin, sqrt
+import re
 from secrets import token_urlsafe
+from urllib.error import URLError
+from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -79,6 +83,14 @@ class Notification:
 
 
 @dataclass
+class OfficeLocation:
+    name: str = "Jakarta HQ"
+    latitude: float = -6.2
+    longitude: float = 106.8166
+    radius_meters: float = 300
+
+
+@dataclass
 class DemoStore:
     tenant_id: str = "pt-movon-solusi-kreatif"
     employees: dict[str, Employee] = field(default_factory=dict)
@@ -89,6 +101,7 @@ class DemoStore:
     sessions: dict[str, str] = field(default_factory=dict)
     idempotency: dict[str, str] = field(default_factory=dict)
     audit: list[dict] = field(default_factory=list)
+    office: OfficeLocation = field(default_factory=OfficeLocation)
 
 
 store = DemoStore()
@@ -170,6 +183,7 @@ def reset_demo_store() -> None:
     store.idempotency = {}
     store.sessions = {}
     store.audit = []
+    store.office = OfficeLocation()
 
 
 reset_demo_store()
@@ -205,6 +219,18 @@ def notify(user_id: str, title: str, detail: str, target: str) -> None:
     store.notifications[item.id] = item
 
 
+DEFAULT_OFFICE_LATITUDE = -6.2
+DEFAULT_OFFICE_LONGITUDE = 106.8166
+DEFAULT_OFFICE_RADIUS_METERS = 300
+# Keep aliases used by tests and seed data.
+OFFICE_LATITUDE = DEFAULT_OFFICE_LATITUDE
+OFFICE_LONGITUDE = DEFAULT_OFFICE_LONGITUDE
+OFFICE_RADIUS_METERS = DEFAULT_OFFICE_RADIUS_METERS
+# GPS uncertainty may expand the allowed radius slightly, but never enough to check in from home.
+MAX_ACCURACY_CREDIT_METERS = 50
+LOW_ACCURACY_METERS = 100
+
+
 def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     radius = 6_371_000
     d_lat, d_lon = radians(lat2 - lat1), radians(lon2 - lon1)
@@ -213,6 +239,84 @@ def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
         + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
     )
     return 2 * radius * asin(sqrt(value))
+
+
+def current_office() -> OfficeLocation:
+    return store.office
+
+
+def office_payload(office: OfficeLocation | None = None) -> dict:
+    item = office or current_office()
+    return {
+        "name": item.name,
+        "latitude": item.latitude,
+        "longitude": item.longitude,
+        "radius_meters": item.radius_meters,
+    }
+
+
+def office_distance_meters(latitude: float, longitude: float) -> float:
+    office = current_office()
+    return haversine_meters(latitude, longitude, office.latitude, office.longitude)
+
+
+def allowed_check_in_radius_meters(accuracy_meters: float) -> float:
+    return current_office().radius_meters + min(max(accuracy_meters, 0), MAX_ACCURACY_CREDIT_METERS)
+
+
+def _valid_coordinates(latitude: float, longitude: float) -> tuple[float, float] | None:
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return round(latitude, 6), round(longitude, 6)
+
+
+def parse_google_maps_location(text: str) -> tuple[float, float] | None:
+    value = text.strip()
+    if not value:
+        return None
+
+    raw = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", value)
+    if raw:
+        return _valid_coordinates(float(raw.group(1)), float(raw.group(2)))
+
+    pin = re.search(r"!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)", value)
+    if pin:
+        return _valid_coordinates(float(pin.group(1)), float(pin.group(2)))
+
+    at = re.search(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)", value)
+    if at:
+        return _valid_coordinates(float(at.group(1)), float(at.group(2)))
+
+    try:
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        query = parse_qs(parsed.query)
+        for key in ("q", "query", "ll", "center", "destination", "daddr"):
+            if key not in query:
+                continue
+            match = re.search(
+                r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)",
+                unquote(query[key][0]),
+            )
+            if match:
+                return _valid_coordinates(float(match.group(1)), float(match.group(2)))
+    except ValueError:
+        pass
+
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", value)
+    if match:
+        return _valid_coordinates(float(match.group(1)), float(match.group(2)))
+    return None
+
+
+def resolve_maps_url(url: str) -> str:
+    """Follow short Google Maps redirects so coordinates can be parsed from the final URL."""
+    request = Request(
+        url,
+        headers={"User-Agent": "TeamkuOfficeSettings/1.0"},
+        method="GET",
+    )
+    with urlopen(request, timeout=8) as response:  # noqa: S310 - admin-provided Maps URL
+        return str(response.geturl())
 
 
 def working_days(start: date, end: date) -> int:
@@ -276,6 +380,17 @@ class CheckIn(BaseModel):
 
 class CheckOut(BaseModel):
     summary: str = Field(min_length=4, max_length=1000)
+
+
+class OfficeSettingsInput(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_meters: float = Field(ge=50, le=5_000)
+
+
+class MapsUrlInput(BaseModel):
+    url: str = Field(min_length=4, max_length=2_000)
 
 
 class LeaveInput(BaseModel):
@@ -416,6 +531,56 @@ async def update_employee(
     return asdict(employee)
 
 
+@router.get("/settings/office")
+async def get_office_settings(x_demo_user: str | None = Header(default=None)) -> dict:
+    actor(x_demo_user)
+    return office_payload()
+
+
+@router.put("/settings/office")
+async def update_office_settings(
+    payload: OfficeSettingsInput, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    store.office = OfficeLocation(**payload.model_dump())
+    audit("settings.office_updated", user, store.office.name)
+    return office_payload()
+
+
+@router.post("/settings/office/from-maps-url")
+async def office_from_maps_url(
+    payload: MapsUrlInput, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    source = payload.url.strip()
+    resolved = source
+    host = urlparse(source if "://" in source else f"https://{source}").hostname or ""
+    if host.endswith("goo.gl") or host.endswith("app.goo.gl"):
+        try:
+            resolved = resolve_maps_url(source if "://" in source else f"https://{source}")
+        except (URLError, TimeoutError, ValueError) as error:
+            raise HTTPException(
+                422,
+                "Tautan singkat Google Maps tidak dapat dibuka. Salin URL lengkap dari bilah alamat setelah membuka tautan.",
+            ) from error
+    coords = parse_google_maps_location(resolved) or parse_google_maps_location(source)
+    if not coords:
+        raise HTTPException(
+            422,
+            "Koordinat tidak ditemukan. Tempel tautan Google Maps (Share) atau teks seperti -6.2, 106.8166.",
+        )
+    latitude, longitude = coords
+    audit("settings.office_maps_parsed", user, f"{latitude},{longitude}")
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "resolved_url": resolved,
+        "maps_url": f"https://www.google.com/maps?q={latitude},{longitude}",
+    }
+
+
 @router.get("/attendance/today")
 async def attendance_today(x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
@@ -462,12 +627,18 @@ async def check_in(
         raise HTTPException(422, "Selfie kamera langsung wajib untuk kebijakan ini")
     if not payload.location_share_approved:
         raise HTTPException(422, "Persetujuan berbagi lokasi diperlukan untuk check-in")
-    distance = haversine_meters(payload.latitude, payload.longitude, -6.2, 106.8166)
-    anomaly = (
-        "outside_geofence"
-        if distance > 300 + payload.accuracy_meters
-        else ("low_accuracy" if payload.accuracy_meters > 100 else None)
-    )
+    distance = office_distance_meters(payload.latitude, payload.longitude)
+    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters)
+    office = current_office()
+    if distance > allowed_radius:
+        raise HTTPException(
+            403,
+            (
+                f"Check-in ditolak. Anda berada sekitar {round(distance)} m dari kantor. "
+                f"Presensi hanya diizinkan dalam radius {round(office.radius_meters)} m dari {office.name}."
+            ),
+        )
+    anomaly = "low_accuracy" if payload.accuracy_meters > LOW_ACCURACY_METERS else None
     record = Attendance(
         str(uuid4()),
         user.id,
@@ -485,6 +656,7 @@ async def check_in(
         "id": record.id,
         "checked_in_at": record.checked_in_at,
         "distance_meters": round(distance),
+        "allowed_radius_meters": round(allowed_radius),
         "anomaly": anomaly,
         "agenda_count": len(payload.agenda),
     }

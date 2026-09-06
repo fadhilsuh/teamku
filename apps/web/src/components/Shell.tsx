@@ -4,15 +4,17 @@ import Link from "next/link";
 import {usePathname, useRouter} from "next/navigation";
 import {useEffect, useMemo, useState} from "react";
 import {api} from "../lib/api";
+import {waitForAuthTransition} from "../lib/transition";
+import {AuthTransition} from "./AuthTransition";
 import {Icon} from "./Icon";
 
 type Role = "employee" | "manager" | "hr_admin";
 type User = {id:string;name:string;email:string;role:Role;department:string;title:string};
 type Notification = {id:string;title:string;detail:string;target:string;read:boolean};
-type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"];
+type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"|"pin"];
 
 const workspace: NavItem[] = [
-  ["Dashboard","/app/overview","grid"],
+  ["Beranda","/app/overview","grid"],
   ["Kehadiran","/app/attendance/today","clock"],
   ["Agenda & Cuti","/app/time/time-off","calendar"],
 ];
@@ -28,6 +30,7 @@ export function Shell({children}:{children:React.ReactNode}) {
   const [searchOpen,setSearchOpen]=useState(false);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [intelligenceOpen,setIntelligenceOpen]=useState(false);
+  const [signingOut,setSigningOut]=useState(false);
 
   useEffect(()=>{
     const token=localStorage.getItem("movon_user");
@@ -44,7 +47,7 @@ export function Shell({children}:{children:React.ReactNode}) {
     return items;
   },[user]);
   const operations=useMemo<NavItem[]>(()=>{
-    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"]];
+    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"],["Pengaturan","/app/settings","pin"]];
     if(user?.role==="manager")return [["Persetujuan","/app/approvals","check"],["Slip Gaji","/app/payroll/payslips","wallet"]];
     return [["Slip Gaji","/app/payroll/payslips","wallet"]];
   },[user]);
@@ -53,7 +56,21 @@ export function Shell({children}:{children:React.ReactNode}) {
   const unread=notifications.filter(item=>!item.read).length;
   const allNav=[...nav,...operations];
 
-  const logout=async()=>{const token=localStorage.getItem("movon_user")||undefined;try{if(token)await api("/auth/logout",{method:"POST"},token)}catch{}finally{localStorage.removeItem("movon_user");router.replace("/login");router.refresh()}};
+  const logout=async()=>{
+    if(signingOut)return;
+    const startedAt=Date.now();
+    setSigningOut(true);
+    const token=localStorage.getItem("movon_user")||undefined;
+    try{
+      if(token)await api("/auth/logout",{method:"POST"},token);
+    }catch{
+      // Local logout must still complete if the server is unavailable.
+    }finally{
+      await waitForAuthTransition(startedAt);
+      localStorage.removeItem("movon_user");
+      router.replace("/login");
+    }
+  };
   const markRead=async()=>{
     const token=localStorage.getItem("movon_user")||undefined;
     await api("/notifications/read-all",{method:"POST"},token);
@@ -65,7 +82,7 @@ export function Shell({children}:{children:React.ReactNode}) {
   return <div className="app-frame">
     {menuOpen&&<button className="sidebar-backdrop" aria-label="Tutup navigasi" onClick={()=>setMenuOpen(false)}/>}
     <aside className={menuOpen?"sidebar open":"sidebar"}>
-      <Link className="sidebar-brand" href="/app/overview"><span>MOVON</span><small>PEOPLE OS</small></Link>
+      <Link className="sidebar-brand" href="/app/overview"><span>teamku</span><small>PEOPLE OS</small></Link>
       <div className="sidebar-section"><p>Workspace</p>{links(nav)}</div>
       {operations.length>0&&<div className="sidebar-section"><p>Operations</p>{links(operations)}</div>}
       <div className={intelligenceOpen?"sidebar-callout expanded":"sidebar-callout"}><span className="callout-icon"><Icon name="spark"/></span><b>Movon Intelligence</b><small>{intelligenceOpen?"Ringkasan operasional berasal dari data kehadiran, cuti, dan payroll di workspace ini.":"Insight tim, tanpa spreadsheet."}</small><button type="button" onClick={()=>setIntelligenceOpen(value=>!value)}>{intelligenceOpen?"Tutup penjelasan":"Pelajari fitur"}</button></div>
@@ -82,10 +99,22 @@ export function Shell({children}:{children:React.ReactNode}) {
           <span className="top-avatar">{initials}</span>
         </div>
         {searchOpen&&<div className="topbar-popover search-popover"><b>Pindah cepat</b>{allNav.map(([label,href,icon])=><Link href={href} key={href} onClick={()=>setSearchOpen(false)}><Icon name={icon}/><span>{label}</span></Link>)}</div>}
-        {notificationsOpen&&<div className="topbar-popover notification-popover"><div className="popover-head"><b>Notifikasi</b>{unread>0&&<button onClick={markRead}>Tandai dibaca</button>}</div>{notifications.length?notifications.map(item=><Link className={item.read?"notification-item":"notification-item unread"} href={item.target} key={item.id} onClick={()=>setNotificationsOpen(false)}><b>{item.title}</b><small>{item.detail}</small></Link>):<p className="popover-empty">Tidak ada notifikasi baru.</p>}</div>}
       </header>
-      <main className="content">{children}</main>
+      <main className="content"><div className="route-content" key={pathname}>{children}</div></main>
       <nav className="mobile-nav">{links(nav.slice(0,4))}</nav>
+      {notificationsOpen&&(
+        <div className="dialog-backdrop" role="presentation" onClick={()=>setNotificationsOpen(false)}>
+          <section className="decision-dialog notification-inbox-dialog" role="dialog" aria-modal="true" aria-labelledby="notifications-title" onClick={event=>event.stopPropagation()}>
+            <div className="popover-head">
+              <div><p className="eyebrow">Inbox</p><h2 id="notifications-title">Notifikasi</h2></div>
+              {unread>0&&<button type="button" onClick={markRead}>Tandai dibaca</button>}
+            </div>
+            {notifications.length?notifications.map(item=><Link className={item.read?"notification-item":"notification-item unread"} href={item.target} key={item.id} onClick={()=>setNotificationsOpen(false)}><b>{item.title}</b><small>{item.detail}</small></Link>):<p className="popover-empty">Tidak ada notifikasi baru.</p>}
+            <div className="dialog-actions"><button type="button" className="secondary-button" onClick={()=>setNotificationsOpen(false)}>Tutup</button></div>
+          </section>
+        </div>
+      )}
+      {signingOut&&<AuthTransition message="Mengakhiri sesi…"/>}
     </div>
   </div>;
 }

@@ -1,1 +1,1 @@
-"""Movon HR API."""
+"""Teamku API, powered by movon digital house."""

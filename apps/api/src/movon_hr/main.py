@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from movon_hr.core.settings import settings
 from movon_hr.modules.api import router
 
-app = FastAPI(title="Movon HR API", version="0.1.0", openapi_url="/api/v1/openapi.json")
+app = FastAPI(title="Teamku API", version="0.1.0", openapi_url="/api/v1/openapi.json")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

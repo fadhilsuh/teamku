@@ -1,42 +1,84 @@
 "use client";
 
 import {useEffect,useState} from "react";
-import Link from "next/link";
-import {Shell} from "../../../components/Shell";
-import {Icon} from "../../../components/Icon";
+import {LazyLink as Link} from "../../../components/LazyLink";
+import {NotificationDialog,NotificationDialogState} from "../../../components/NotificationDialog";
 import {api} from "../../../lib/api";
 
 type Attendance={checked_in_at:string;checked_out_at?:string;anomaly?:string};
 type Dashboard={current_user:{name:string;role:string};headcount:number;present:number;late:number;pending_approvals:number;agenda_total:number;agenda_completed:number;attendance:Attendance[]};
 type Leave={items:{status:string}[];balance:{remaining_days:number}};
+type Payslip={period:string;published_at:string};
 const auth=()=>localStorage.getItem("movon_user")||undefined;
 
 export default function Overview(){
- const [data,setData]=useState<Dashboard>();
- const [leave,setLeave]=useState<Leave>();
- const [error,setError]=useState("");
- const load=()=>api<Dashboard>("/dashboard",{},auth()).then(result=>{
-   setData(result);setError("");
-   if(result.current_user.role==="employee")api<Leave>("/leave-requests",{},auth()).then(setLeave).catch(()=>undefined);
- }).catch(reason=>setError(reason.message));
- useEffect(()=>{load()},[]);
- return <Shell>{data?.current_user.role==="employee"?<Employee data={data} leave={leave} load={load}/>:<Team data={data} load={load}/>} {error&&<p className="notice">{error}</p>}</Shell>;
+  const [data,setData]=useState<Dashboard>();
+  const [leave,setLeave]=useState<Leave>();
+  const [payslip,setPayslip]=useState<Payslip>();
+  const [notification,setNotification]=useState<NotificationDialogState|null>(null);
+  const load=async()=>{
+    try{
+      const dashboard=await api<Dashboard>("/dashboard",{},auth());
+      setData(dashboard);
+      const [leaveResult,payslipResult]=await Promise.all([
+        api<Leave>("/leave-requests",{},auth()).catch(()=>undefined),
+        api<{items:Payslip[]}>("/payroll/payslips",{},auth()).catch(()=>undefined),
+      ]);
+      setLeave(leaveResult);setPayslip(payslipResult?.items[0]);
+    }catch(reason){setNotification({type:"error",title:"Beranda belum dapat dimuat",message:reason instanceof Error?reason.message:"Beranda belum dapat dimuat."})}
+  };
+  useEffect(()=>{load()},[]);
+  return <>{data?<Home data={data} leave={leave} payslip={payslip}/>:<HomeLoading/>}<NotificationDialog notification={notification} onClose={()=>setNotification(null)}/></>;
 }
 
-function Employee({data,leave,load}:{data:Dashboard;leave:Leave|undefined;load:()=>void}){
- const attendance=data.attendance[0];
- const active=Boolean(attendance&&!attendance.checked_out_at);
- const finished=Boolean(attendance?.checked_out_at);
- const status=active?"Sedang bekerja":finished?"Hari kerja selesai":"Belum check-in";
- const agendaRate=data.agenda_total?Math.round(data.agenda_completed/data.agenda_total*100):0;
- return <><section className="page-heading"><div><p className="eyebrow">My workday</p><h1>Selamat datang, {data.current_user.name.split(" ")[0]}</h1><p>Ringkasan hari kerja pribadi Anda.</p></div><div className="heading-actions"><button className="secondary-button" onClick={load}><Icon name="calendar"/>Perbarui</button><Link className="primary-link" href="/app/attendance/today"><Icon name="clock"/>{active?"Buka presensi":"Presensi hari ini"}</Link></div></section><section className="metric-grid"><Metric label="Status hari ini" value={status} meta={active?"Presensi sedang aktif":"Perbarui kehadiran Anda"} tone={active?"green":"orange"} icon={active?"check":"clock"}/><Metric label="Jam check-in" value={attendance?time(attendance.checked_in_at):"—"} meta={attendance?"WIB · lokasi tercatat":"Belum ada check-in"} tone="red" icon="clock"/><Metric label="Jam kerja" value={attendance?duration(attendance.checked_in_at,attendance.checked_out_at):"0j 00m"} meta={finished?"Total hari ini":"Berjalan sejak check-in"} tone="purple" icon="calendar"/><Metric label="Agenda hari ini" value={`${data.agenda_completed}/${data.agenda_total}`} meta={data.agenda_total?`${agendaRate}% selesai`:"Tambahkan saat check-in"} tone="orange" icon="check"/></section><section className="dashboard-grid"><article className="panel trend-panel"><div className="panel-head"><div><p className="eyebrow">Today&apos;s attendance</p><h2>Hari kerja Anda</h2></div><span className={active?"live-pill":"status pending"}>{status}</span></div><div className="employee-work-summary"><p><span>Shift hari ini</span><b>09.00 — 18.00 WIB</b></p><p><span>Check-in</span><b>{attendance?time(attendance.checked_in_at):"Belum check-in"}</b></p><p><span>Lokasi</span><b>{attendance?(attendance.anomaly?"Perlu ditinjau":"Terverifikasi"):"Belum diverifikasi"}</b></p></div><Link className="primary-link employee-primary-action" href="/app/attendance/today"><Icon name="clock"/>{finished?"Lihat presensi":active?"Kelola check-out":"Mulai check-in"}</Link></article><article className="panel agenda-panel"><div className="panel-head"><div><p className="eyebrow">Daily focus</p><h2>Agenda hari ini</h2></div></div><div className="agenda-score"><div><strong>{data.agenda_total}</strong><span>agenda tercatat</span></div><div className="progress-ring">{agendaRate}%</div></div><div className="agenda-bars"><span><i style={{width:`${agendaRate}%`}}/></span><p><b>{data.agenda_completed} agenda selesai</b><small>Prioritas tercatat saat check-in.</small></p></div></article><article className="panel action-panel"><div className="panel-head"><div><p className="eyebrow">Time off</p><h2>Cuti & izin saya</h2></div></div><div className="employee-work-summary"><p><span>Sisa cuti</span><b>{leave?.balance.remaining_days??"—"} hari</b></p><p><span>Permohonan terakhir</span><b>{leave?.items[0]?leaveLabel(leave.items[0].status):"Belum ada"}</b></p></div><Action href="/app/time/time-off" icon="calendar" title="Kelola cuti & izin" detail="Ajukan cuti dan pantau keputusan atasan"/></article><article className="panel attendance-panel"><div className="panel-head"><div><p className="eyebrow">Personal history</p><h2>Presensi saya hari ini</h2></div></div><div className="table-wrap"><table className="table"><thead><tr><th>Tanggal</th><th>Check-in</th><th>Check-out</th><th>Status</th></tr></thead><tbody>{attendance?<tr><td>Hari ini</td><td>{time(attendance.checked_in_at)}</td><td>{attendance.checked_out_at?time(attendance.checked_out_at):"—"}</td><td><span className={attendance.anomaly?"status warning":"status success"}>{attendance.anomaly?"Perlu ditinjau":finished?"Selesai":"Hadir"}</span></td></tr>:<Empty/>}</tbody></table></div></article></section></>;
+function Home({data,leave,payslip}:{data:Dashboard;leave:Leave|undefined;payslip:Payslip|undefined}){
+  const attendance=data.attendance[0];
+  const checkedIn=Boolean(attendance&&!attendance.checked_out_at);
+  const finished=Boolean(attendance?.checked_out_at);
+  const attendanceLabel=checkedIn?"Sedang bekerja":finished?"Hari kerja selesai":"Belum check-in";
+  const progress=data.agenda_total?Math.round(data.agenda_completed/data.agenda_total*100):0;
+  const firstName=data.current_user.name.split(" ")[0];
+  const isEmployee=data.current_user.role==="employee";
+  const currentTime=now();
+  const greeting=currentTime.getHours()<12?"Selamat pagi":currentTime.getHours()<17?"Selamat siang":"Selamat sore";
+  const requestLabel=leave?.items[0]?leaveStatus(leave.items[0].status):"Tidak ada permohonan aktif";
+  return <section className="home-page">
+    <header className="home-hero">
+      <div><p className="home-date">{formatLongDate(currentTime)}</p><h1>{greeting}, {firstName} <span aria-hidden="true">👋</span></h1><p>Siap memulai hari yang produktif?</p></div>
+      <div className="home-date-picker">▣ <span>{formatLongDate(currentTime)}</span></div>
+    </header>
+
+    <div className="home-primary-grid">
+      <article className="home-card attendance-card">
+        <div className="home-card-head"><div><span className="home-icon red">◷</span><h2>{isEmployee?"Kehadiran hari ini":"Kehadiran tim hari ini"}</h2></div><span className="home-time"><i/>{checkedIn?time(attendance!.checked_in_at):"09:00 WIB"}</span></div>
+        <div className="attendance-summary"><div><b className={checkedIn?"attendance-ok":"attendance-pending"}>{isEmployee?attendanceLabel:`${data.present} dari ${data.headcount} hadir`}</b><dl><div><dt>◷ Shift</dt><dd>09.00 – 18.00 WIB</dd></div><div><dt>⌂ Lokasi kerja</dt><dd>Jakarta HQ</dd></div><div><dt>⌖ Lokasi</dt><dd>{checkedIn?"Terverifikasi saat check-in":"Diverifikasi saat check-in"}</dd></div></dl></div><Clock/></div>
+        <Link className="home-primary-button" href="/app/attendance/today">◉ {checkedIn?"Buka presensi":"Mulai check-in"}</Link>
+      </article>
+
+      <article className="home-card agenda-card">
+        <div className="home-card-head"><div><span className="home-icon red">□</span><h2>Agenda hari ini</h2></div><Link className="home-outline-button" href="/app/attendance/today">＋ Tambah agenda</Link></div>
+        <div className="agenda-progress"><div><span>{data.agenda_completed} dari {data.agenda_total} selesai</span><b>{progress}%</b></div><i><em style={{width:`${progress}%`}}/></i></div>
+        <div className="agenda-list">{data.agenda_total?<><AgendaRow title="Agenda kerja hari ini" detail="Prioritas dicatat saat check-in" index={1}/><AgendaRow title={`${data.agenda_total-data.agenda_completed} agenda perlu ditindaklanjuti`} detail="Perbarui status dari halaman presensi" index={2}/></>:<div className="agenda-empty"><span>＋</span><b>Belum ada agenda</b><p>Tambahkan prioritas saat memulai check-in.</p></div>}</div>
+      </article>
+    </div>
+
+    <div className="home-secondary-grid">
+      <SummaryCard icon="☘" tone="green" label="Sisa cuti" value={`${leave?.balance.remaining_days??"—"} hari`} detail="Tahun ini" action="Lihat saldo" href="/app/time/time-off"/>
+      <SummaryCard icon="▧" tone="blue" label="Permohonan" value={requestLabel} detail="Ajukan cuti atau izin jika diperlukan" action="Ajukan cuti atau izin" href="/app/time/time-off"/>
+      <SummaryCard icon="▤" tone="purple" label="Slip gaji terbaru" value={payslip?formatPeriod(payslip.period):"Belum ada slip"} detail={payslip?`Diterbitkan ${formatShortDate(payslip.published_at)}`:"Slip akan tampil setelah dipublikasikan"} action="Lihat slip gaji" href="/app/payroll/payslips"/>
+    </div>
+
+    <div className={checkedIn?"home-status checked":"home-status"}><b>{checkedIn?"✓ Sudah check-in":"ⓘ Belum check-in"}</b><span>{checkedIn?"Presensi aktif untuk hari ini.":"Agenda dapat diperbarui setelah check-in."}</span></div>
+  </section>;
 }
 
-function Team({data,load}:{data:Dashboard|undefined;load:()=>void}){const absent=Math.max((data?.headcount||0)-(data?.present||0),0);return <><section className="page-heading"><div><p className="eyebrow">Overview</p><h1>Selamat datang, {data?.current_user.name.split(" ")[0]||"..."}</h1><p>Ringkasan operasional workspace hari ini.</p></div><button className="secondary-button" onClick={load}>Perbarui</button></section><section className="metric-grid"><Metric label="Total karyawan" value={data?.headcount} meta="Dalam cakupan akses Anda" tone="red" icon="users"/><Metric label="Hadir hari ini" value={data?.present} meta="Kehadiran tim hari ini" tone="green" icon="check"/><Metric label="Belum hadir" value={absent} meta={`${data?.late||0} datang terlambat`} tone="orange" icon="clock"/><Metric label="Perlu persetujuan" value={data?.pending_approvals} meta="Menunggu tindakan" tone="purple" icon="calendar"/></section><section className="dashboard-grid"><article className="panel action-panel"><p className="eyebrow">Quick actions</p><h2>Mulai pekerjaan</h2><Action href="/app/attendance/today" icon="clock" title="Presensi hari ini" detail="Selfie, lokasi, dan agenda kerja" featured/><Action href="/app/approvals" icon="check" title="Buka persetujuan" detail={`${data?.pending_approvals||0} item menunggu`}/></article><article className="panel agenda-panel"><p className="eyebrow">Daily focus</p><h2>Agenda hari ini</h2><div className="agenda-score"><strong>{data?.agenda_total??"—"}</strong><span>agenda tercatat</span></div></article></section></>}
-
-function Metric({label,value,meta,tone,icon}:{label:string;value:string|number|undefined;meta:string;tone:string;icon:"users"|"check"|"clock"|"calendar"}){return <article className={`metric-card ${tone}`}><span className="metric-icon"><Icon name={icon}/></span><div><p>{label}</p><strong>{value??"—"}</strong><small>{meta}</small></div></article>}
-function Action({href,icon,title,detail,featured=false}:{href:string;icon:"clock"|"calendar"|"check";title:string;detail:string;featured?:boolean}){return <Link href={href} className={featured?"action-row featured":"action-row"}><span className="action-icon"><Icon name={icon}/></span><span><b>{title}</b><small>{detail}</small></span><Icon name="chevron"/></Link>}
-function Empty(){return <tr><td colSpan={4}><div className="empty-table"><span><Icon name="clock"/></span><b>Belum ada presensi hari ini</b><p>Mulai check-in untuk mencatat jam kerja Anda.</p><Link className="text-link" href="/app/attendance/today">Mulai presensi →</Link></div></td></tr>}
+function AgendaRow({title,detail,index}:{title:string;detail:string;index:number}){return <div className="agenda-row"><span className="agenda-check"/><div><b>{title}</b><small>{detail}</small></div><time>{index===1?"Hari ini":"Selanjutnya"}</time></div>}
+function SummaryCard({icon,tone,label,value,detail,action,href}:{icon:string;tone:string;label:string;value:string;detail:string;action:string;href:string}){return <article className="home-summary-card"><span className={`summary-icon ${tone}`}>{icon}</span><div><p>{label}</p><b>{value}</b><small>{detail}</small></div><Link href={href} className="summary-action">{action}</Link></article>}
+function Clock(){return <div className="home-clock" aria-hidden="true"><i/><b/></div>}
+function HomeLoading(){return <section className="home-page home-loading"><div/><div/><div/></section>}
+function now(){return new Date()}
 function time(value:string){return new Date(value).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})+" WIB"}
-function duration(start:string,end?:string){const ms=Math.max(0,new Date(end||Date.now()).getTime()-new Date(start).getTime());return `${Math.floor(ms/3_600_000)}j ${Math.floor(ms%3_600_000/60_000).toString().padStart(2,"0")}m`}
-function leaveLabel(value:string){return ({pending:"Menunggu persetujuan",approved:"Disetujui",rejected:"Ditolak",revision_requested:"Perlu revisi",cancelled:"Dibatalkan"} as Record<string,string>)[value]||value}
+function formatLongDate(value:Date){return new Intl.DateTimeFormat("id-ID",{weekday:"long",day:"numeric",month:"long",year:"numeric"}).format(value)}
+function formatShortDate(value:string){return new Intl.DateTimeFormat("id-ID",{day:"numeric",month:"long",year:"numeric"}).format(new Date(value))}
+function formatPeriod(value:string){return new Intl.DateTimeFormat("id-ID",{month:"long",year:"numeric"}).format(new Date(`${value}-01T00:00:00`))}
+function leaveStatus(value:string){return ({pending:"Menunggu persetujuan",approved:"Cuti disetujui",rejected:"Permohonan ditolak",revision_requested:"Perlu revisi",cancelled:"Permohonan dibatalkan"} as Record<string,string>)[value]||value}

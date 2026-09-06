@@ -1,6 +1,6 @@
-# Movon HR
+# Teamku
 
-Movon HR is a modular, API-first HRIS MVP for Indonesian teams. This repository contains independently deployable Next.js and FastAPI applications.
+Teamku, powered by movon digital house, is a modular, API-first HRIS MVP for Indonesian teams. This repository contains independently deployable Next.js and FastAPI applications.
 
 ## Local start
 
