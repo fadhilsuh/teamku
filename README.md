@@ -10,6 +10,10 @@ Teamku, powered by movon digital house, is a modular, API-first HRIS MVP for Ind
 
 For a quick API-only setup, install from `apps/api` with `uv sync --all-groups`, then run `uv run uvicorn movon_hr.main:app --reload`.
 
+## Persistence
+
+Set `MOVON_DATABASE_URL` (e.g. `postgresql+asyncpg://movon:movon@localhost:5432/movon`) and every input is stored in PostgreSQL: the store is hydrated from the database on startup and written back after each mutating request, so data survives restarts. The docker compose stack wires this automatically and keeps Postgres data in the `postgres_data` volume. When `MOVON_DATABASE_URL` is unset, the API falls back to the ephemeral in-memory demo store (used by the tests).
+
 Demo credentials: `hr@movon.test` / `Demo123!`, `manager@movon.test` / `Demo123!`, and `employee@movon.test` / `Demo123!`.
 
 ## Architecture and boundaries
@@ -18,7 +22,7 @@ The web app only renders UI and calls `/api/v1`; authorization, calculation, val
 
 Implemented demo vertical slices: authenticated role-aware dashboards; searchable employee directory with HR create/status actions; camera/location attendance with server-side Haversine validation, idempotency and agenda; leave request history, balance impact, cancellation and manager/HR decisions; in-app notifications; and a decimal-safe payroll calculation, finalization, locking and publishing flow.
 
-The local demo repository is intentionally in-memory, so data resets whenever the API process restarts. It is useful for evaluating the complete UI workflows but is not the production persistence adapter described in the architecture documents.
+Without `MOVON_DATABASE_URL` the local demo repository is intentionally in-memory, so data resets whenever the API process restarts. That mode is useful for evaluating the complete UI workflows; configure PostgreSQL (see Persistence above) to keep all input across restarts.
 
 Attendance is browser verification, not liveness or anti-spoofing. A selfie is captured from the live camera (never uploaded from a gallery), location accuracy is recorded, and out-of-range/low-confidence results are review signals.
 

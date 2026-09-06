@@ -6,6 +6,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="$ROOT_DIR/.service-pids"
 LOG_DIR="$ROOT_DIR/.service-logs"
 
+# Ensure PostgreSQL is ready and export MOVON_DATABASE_URL so the backend
+# persists every input instead of using the ephemeral in-memory store.
+# shellcheck source=/dev/null
+source "$ROOT_DIR/scripts/ensure-db.sh"
+ensure_movon_database
+
 port_is_listening() {
   lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
 }
@@ -73,7 +79,7 @@ start_service() {
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
-start_service "backend" "$ROOT_DIR/apps/api" 8000 "env PYTHONPATH=src uv run uvicorn movon_hr.main:app --reload --host 0.0.0.0 --port 8000"
+start_service "backend" "$ROOT_DIR/apps/api" 8000 "env PYTHONPATH=src MOVON_DATABASE_URL=$MOVON_DATABASE_URL uv run uvicorn movon_hr.main:app --reload --host 0.0.0.0 --port 8000"
 start_service "frontend" "$ROOT_DIR/apps/web" 3000 "npm run dev -- --hostname 0.0.0.0 --port 3000" true
 
 echo "Teamku is available at http://localhost:3000 (API: http://localhost:8000/docs)."

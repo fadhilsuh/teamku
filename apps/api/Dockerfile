@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi uvicorn pydantic pydantic-settings argon2-cffi
+RUN pip install --no-cache-dir fastapi uvicorn pydantic pydantic-settings argon2-cffi "sqlalchemy[asyncio]" asyncpg
 COPY src ./src
 ENV PYTHONPATH=/app/src
 USER nobody
