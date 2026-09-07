@@ -50,7 +50,12 @@ def test_fresh_demo_account_starts_without_a_check_in() -> None:
     response = client.get("/api/v1/attendance/today", headers=fresh_employee_headers())
 
     assert response.status_code == 200
-    assert response.json() == {"state": "not_checked_in", "session": None}
+    assert response.json() == {
+        "state": "not_checked_in",
+        "session": None,
+        "pending_reverification": None,
+        "is_remote": False,
+    }
 
 
 def test_check_in_requires_location_sharing_approval() -> None:

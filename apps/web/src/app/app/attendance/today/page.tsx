@@ -5,7 +5,12 @@ import {Icon} from "../../../../components/Icon";
 import {NotificationDialog,NotificationDialogState} from "../../../../components/NotificationDialog";
 import {api} from "../../../../lib/api";
 
-type AttendanceState={state:"not_checked_in"|"checked_in"|"completed";session:null|{id:string;checked_in_at:string;checked_out_at:string|null;anomaly:string|null;agenda_count:number;summary:string|null}};
+type AttendanceState={
+  state:"not_checked_in"|"checked_in"|"completed";
+  session:null|{id:string;checked_in_at:string;checked_out_at:string|null;anomaly:string|null;agenda_count:number;summary:string|null};
+  pending_reverification:null|{id:string;due_at:string;kind:string};
+  is_remote:boolean;
+};
 type CameraState="idle"|"previewing"|"captured";
 type OfficeSettings={name:string;latitude:number;longitude:number;radius_meters:number};
 
@@ -19,8 +24,11 @@ export default function Today(){
   const [cameraState,setCameraState]=useState<CameraState>("idle");
   const [selfiePreview,setSelfiePreview]=useState("");
   const [locationShareApproved,setLocationShareApproved]=useState(false);
+  const [reverifyOpen,setReverifyOpen]=useState(true);
+  const [reverifyBusy,setReverifyBusy]=useState(false);
   const video=useRef<HTMLVideoElement>(null);
   const cameraStream=useRef<MediaStream|null>(null);
+  const lastPendingId=useRef<string|null>(null);
   const token=()=>localStorage.getItem("movon_user")||undefined;
 
   function notify(type:NotificationDialogState["type"],title:string,message:string){setNotification({type,title,message})}
@@ -36,7 +44,20 @@ export default function Today(){
     if(video.current)video.current.srcObject=null;
   }
 
-  useEffect(()=>{load();return()=>stopCamera()},[]);
+  useEffect(()=>{
+    load();
+    const timer=window.setInterval(()=>{load()},60_000);
+    return()=>{window.clearInterval(timer);stopCamera()};
+  },[]);
+
+  useEffect(()=>{
+    const pendingId=attendance?.pending_reverification?.id||null;
+    if(pendingId&&pendingId!==lastPendingId.current){
+      setReverifyOpen(true);
+      lastPendingId.current=pendingId;
+    }
+    if(!pendingId)lastPendingId.current=null;
+  },[attendance?.pending_reverification?.id]);
 
   async function startCamera(){
     setSelfiePreview("");setLocationShareApproved(false);stopCamera();
@@ -88,6 +109,35 @@ export default function Today(){
     }finally{setBusy(false)}
   }
 
+  async function submitReverify(){
+    if(attendance&&!attendance.is_remote&&cameraState!=="captured"){
+      notify("error","Re-verifikasi belum siap","Ambil selfie terlebih dahulu sebelum mengirim lokasi.");
+      return;
+    }
+    setReverifyBusy(true);
+    try{
+      const position=await new Promise<GeolocationPosition>((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:15000,maximumAge:0}));
+      await api("/attendance/reverify",{
+        method:"POST",
+        body:JSON.stringify({
+          latitude:position.coords.latitude,
+          longitude:position.coords.longitude,
+          accuracy_meters:position.coords.accuracy,
+          selfie_captured:attendance?.is_remote?true:cameraState==="captured",
+        }),
+      },token());
+      notify("success","Lokasi tercatat","Re-verifikasi lokasi berhasil dikirim.");
+      setReverifyOpen(false);
+      setCameraState("idle");
+      setSelfiePreview("");
+      await load();
+    }catch(reason){
+      const geoCode=reason&&typeof reason==="object"&&"code" in reason?Number((reason as {code?:number}).code):NaN;
+      if(geoCode===1)notify("error","Lokasi gagal diambil","Izin lokasi ditolak. Aktifkan akses lokasi browser lalu coba kembali.");
+      else notify("error","Re-verifikasi gagal",reason instanceof Error?reason.message:"Re-verifikasi gagal. Coba kembali.");
+    }finally{setReverifyBusy(false)}
+  }
+
   async function checkout(){
     if(summary.trim().length<4){notify("error","Ringkasan belum lengkap","Tuliskan ringkasan pencapaian minimal 4 karakter sebelum check-out.");return}
     setBusy(true);
@@ -101,6 +151,8 @@ export default function Today(){
   }
 
   const notCheckedIn=attendance?.state==="not_checked_in";
+  const pendingReverify=attendance?.state==="checked_in"&&attendance.pending_reverification;
+  const isRemote=Boolean(attendance?.is_remote);
 
   return <>
     <NotificationDialog notification={notification} onClose={()=>setNotification(null)}/>
@@ -121,7 +173,7 @@ export default function Today(){
       <Icon name="pin"/>
       <div>
         <b>Verifikasi yang transparan</b>
-        <p>Kamera dan lokasi wajib untuk check-in. Presensi hanya diterima jika Anda berada dalam radius kantor.</p>
+        <p>{isRemote?"Pekerja remote bebas lokasi. Kamera tetap dipakai untuk konfirmasi check-in.":"Kamera dan lokasi wajib untuk check-in. Presensi kantor hanya diterima jika Anda berada dalam radius kantor."}</p>
       </div>
     </div>
 
@@ -160,7 +212,7 @@ export default function Today(){
                   <input type="checkbox" checked={locationShareApproved} onChange={event=>setLocationShareApproved(event.target.checked)}/>
                   <span>
                     <b>Saya setuju membagikan lokasi untuk check-in ini</b>
-                    <small>Lokasi diverifikasi terhadap {office.name} (radius {office.radius_meters} m). Check-in dari luar area akan ditolak.</small>
+                    <small>{isRemote?`Lokasi dicatat untuk ${office.name}, tanpa penolakan geofence.`:`Lokasi diverifikasi terhadap ${office.name} (radius ${office.radius_meters} m). Check-in dari luar area akan ditolak.`}</small>
                   </span>
                 </label>
                 <p className="selfie-ready"><Icon name="check"/>Selfie siap. Check-in belum disimpan sampai Anda menekan konfirmasi.</p>
@@ -222,7 +274,7 @@ export default function Today(){
         </ol>
         <div className="location-policy">
           <Icon name="pin"/>
-          <span><b>Lokasi kerja</b><small>{office.name} · wajib dalam radius {office.radius_meters} m</small></span>
+          <span><b>Lokasi kerja</b><small>{isRemote?`${office.name} · pekerja remote, bebas geofence`:`${office.name} · wajib dalam radius ${office.radius_meters} m`}</small></span>
         </div>
         {attendance?.state==="checked_in"&&(
           <div className="checkout-form">
@@ -232,5 +284,28 @@ export default function Today(){
         )}
       </aside>
     </section>
+
+    {pendingReverify&&reverifyOpen&&(
+      <div className="dialog-backdrop" role="presentation">
+        <section className="decision-dialog reverify-dialog" role="dialog" aria-modal="true" aria-labelledby="reverify-title">
+          <p className="eyebrow">Re-verifikasi lokasi</p>
+          <h2 id="reverify-title">Konfirmasi lokasi Anda</h2>
+          <p>Ada permintaan verifikasi lokasi untuk sesi yang sedang berjalan. Ambil lokasi saat ini{isRemote?"":" dan selfie"}.</p>
+          {!isRemote&&cameraState!=="captured"&&(
+            <div className="camera-actions">
+              {cameraState==="idle"&&<button type="button" className="check-action" disabled={reverifyBusy} onClick={startCamera}><Icon name="users"/>Buka kamera</button>}
+              {cameraState==="previewing"&&<button type="button" className="check-action" disabled={reverifyBusy} onClick={captureSelfie}>Ambil foto</button>}
+            </div>
+          )}
+          {cameraState==="captured"&&selfiePreview&&<p className="selfie-ready"><Icon name="check"/>Selfie siap dikirim bersama lokasi.</p>}
+          <div className="dialog-actions">
+            <button type="button" className="secondary-button" disabled={reverifyBusy} onClick={()=>setReverifyOpen(false)}>Tunda sebentar</button>
+            <button type="button" className="primary-action auto-width" disabled={reverifyBusy} onClick={submitReverify}>
+              {reverifyBusy?"Mengirim…":"Kirim lokasi"}
+            </button>
+          </div>
+        </section>
+      </div>
+    )}
   </>;
 }

@@ -34,12 +34,13 @@ def test_any_user_can_read_office_settings() -> None:
     response = client.get("/api/v1/settings/office", headers=employee_headers())
 
     assert response.status_code == 200
-    assert response.json() == {
-        "name": "Jakarta HQ",
-        "latitude": OFFICE_LATITUDE,
-        "longitude": OFFICE_LONGITUDE,
-        "radius_meters": OFFICE_RADIUS_METERS,
-    }
+    body = response.json()
+    assert body["name"] == "Jakarta HQ"
+    assert body["latitude"] == OFFICE_LATITUDE
+    assert body["longitude"] == OFFICE_LONGITUDE
+    assert body["radius_meters"] == OFFICE_RADIUS_METERS
+    assert body["reverify_enabled"] is False
+    assert body["alerts_enabled"] is False
 
 
 def test_employee_cannot_update_office_settings() -> None:

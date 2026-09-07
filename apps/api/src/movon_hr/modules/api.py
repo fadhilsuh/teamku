@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from math import asin, cos, radians, sin, sqrt
+from random import uniform
 from secrets import token_urlsafe
 from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlparse
@@ -64,6 +65,7 @@ class Employee:
     salary: int = 8_000_000
     password_hash: str = ""
     tenant_id: str = ""
+    is_remote: bool = False
 
 
 @dataclass
@@ -88,6 +90,7 @@ class Invitation:
     invited_by: str
     expires_at: datetime
     accepted_at: datetime | None = None
+    is_remote: bool = False
 
 
 @dataclass
@@ -149,11 +152,44 @@ class Notification:
 
 
 @dataclass
+class LocationEvent:
+    id: str
+    employee_id: str
+    attendance_id: str
+    kind: str
+    at: datetime
+    lat: float | None = None
+    lng: float | None = None
+    accuracy: float | None = None
+    distance_meters: float | None = None
+    inside_geofence: bool | None = None
+    anomaly: str | None = None
+    due_at: datetime | None = None
+
+
+@dataclass
+class AlertReceipt:
+    id: str
+    employee_id: str
+    kind: str
+    local_date: date
+
+
+@dataclass
 class OfficeLocation:
     name: str = "Jakarta HQ"
     latitude: float = -6.2
     longitude: float = 106.8166
     radius_meters: float = 300
+    reverify_enabled: bool = False
+    reverify_count_per_day: int = 1
+    reverify_window_start_minutes: int = 60
+    reverify_window_end_minutes: int = 420
+    alerts_enabled: bool = False
+    clock_in_reminder_time: str = "09:15"
+    clock_out_reminder_time: str = "18:15"
+    max_open_hours: int = 10
+    alert_managers: bool = False
 
 
 @dataclass
@@ -173,6 +209,8 @@ class DemoStore:
     office: OfficeLocation = field(default_factory=OfficeLocation)
     invitations: dict[str, Invitation] = field(default_factory=dict)
     password_resets: dict[str, PasswordReset] = field(default_factory=dict)
+    location_events: dict[str, LocationEvent] = field(default_factory=dict)
+    alert_receipts: dict[str, AlertReceipt] = field(default_factory=dict)
 
 # In-memory login throttle: email -> list of recent failed-attempt timestamps.
 # Not persisted; a best-effort brute-force guard within a single process.
@@ -226,6 +264,7 @@ def reset_demo_store() -> None:
     }
     jakarta_now = datetime.now(JAKARTA)
     store.attendance = {}
+    store.location_events = {}
     for index, employee_id in enumerate(
         ["e-manager", "e-004", "e-005", "e-006", "e-007", "e-009", "e-010"]
     ):
@@ -244,6 +283,21 @@ def reset_demo_store() -> None:
             "low_accuracy" if index == 5 else None,
         )
         store.attendance[item.id] = item
+        event = LocationEvent(
+            id=f"loc-seed-{index}",
+            employee_id=employee_id,
+            attendance_id=item.id,
+            kind="check_in",
+            at=checked_in,
+            lat=-6.2,
+            lng=106.8166,
+            accuracy=18,
+            distance_meters=0,
+            inside_geofence=True,
+            anomaly=item.anomaly,
+        )
+        store.location_events[event.id] = event
+    store.employees["e-018"].is_remote = True
     demo_today = datetime.now(JAKARTA).date()
     request = LeaveRequest(
         "request-seed-1",
@@ -276,6 +330,7 @@ def reset_demo_store() -> None:
     store.office = OfficeLocation()
     store.invitations = {}
     store.password_resets = {}
+    store.alert_receipts = {}
     _login_attempts.clear()
 
 
@@ -521,6 +576,15 @@ def office_payload(office: OfficeLocation | None = None) -> dict:
         "latitude": item.latitude,
         "longitude": item.longitude,
         "radius_meters": item.radius_meters,
+        "reverify_enabled": item.reverify_enabled,
+        "reverify_count_per_day": item.reverify_count_per_day,
+        "reverify_window_start_minutes": item.reverify_window_start_minutes,
+        "reverify_window_end_minutes": item.reverify_window_end_minutes,
+        "alerts_enabled": item.alerts_enabled,
+        "clock_in_reminder_time": item.clock_in_reminder_time,
+        "clock_out_reminder_time": item.clock_out_reminder_time,
+        "max_open_hours": item.max_open_hours,
+        "alert_managers": item.alert_managers,
     }
 
 
@@ -531,6 +595,233 @@ def office_distance_meters(latitude: float, longitude: float) -> float:
 
 def allowed_check_in_radius_meters(accuracy_meters: float) -> float:
     return current_office().radius_meters + min(max(accuracy_meters, 0), MAX_ACCURACY_CREDIT_METERS)
+
+
+REVERIFY_GRACE_MINUTES = 15
+TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+ALERT_COPY = {
+    "missed_clock_in": ("Belum clock-in", "Anda belum check-in hari ini."),
+    "missed_clock_out": ("Sesi masih terbuka", "Sesi kehadiran Anda masih terbuka. Lakukan check-out."),
+    "limit_reverify": (
+        "Re-verifikasi terlewat",
+        "Ada permintaan re-verifikasi lokasi yang belum diselesaikan.",
+    ),
+    "limit_geofence": (
+        "Lokasi di luar area kantor",
+        "Re-verifikasi lokasi tercatat di luar radius kantor.",
+    ),
+}
+
+
+def validate_office_policy(data: dict) -> None:
+    count = data["reverify_count_per_day"]
+    if count not in {1, 2, 3}:
+        raise HTTPException(422, "Jumlah re-verifikasi per hari harus 1, 2, atau 3")
+    start = data["reverify_window_start_minutes"]
+    end = data["reverify_window_end_minutes"]
+    if not 0 <= start <= 1_440 or not 0 <= end <= 1_440:
+        raise HTTPException(422, "Jendela re-verifikasi harus antara 0 dan 1440 menit")
+    if end <= start:
+        raise HTTPException(422, "Jendela akhir harus lebih besar dari jendela mulai")
+    for key in ("clock_in_reminder_time", "clock_out_reminder_time"):
+        if not TIME_PATTERN.fullmatch(str(data[key])):
+            raise HTTPException(422, "Format jam pengingat harus HH:MM")
+    hours = data["max_open_hours"]
+    if hours < 1 or hours > 24:
+        raise HTTPException(422, "Batas sesi terbuka harus antara 1 dan 24 jam")
+
+
+def parse_hhmm(value: str) -> time:
+    hour, minute = value.split(":")
+    return time(int(hour), int(minute))
+
+
+def jakarta_date(moment: datetime | None = None) -> date:
+    value = moment or datetime.now(JAKARTA)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(JAKARTA).date()
+
+
+def employee_sessions_on(employee_id: str, day: date) -> list[Attendance]:
+    return [
+        item
+        for item in store.attendance.values()
+        if item.employee_id == employee_id and jakarta_date(item.checked_in_at) == day
+    ]
+
+
+def has_approved_leave(employee_id: str, day: date) -> bool:
+    return any(
+        item.employee_id == employee_id
+        and item.status == "approved"
+        and item.start <= day <= item.end
+        for item in store.requests.values()
+    )
+
+
+def location_events_for(attendance_id: str) -> list[LocationEvent]:
+    return [item for item in store.location_events.values() if item.attendance_id == attendance_id]
+
+
+def is_reverify_slot_open(event: LocationEvent) -> bool:
+    return event.kind == "reverify" and event.lat is None and event.anomaly != "missed_reverify"
+
+
+def record_location_event(**kwargs: object) -> LocationEvent:
+    event = LocationEvent(id=str(uuid4()), **kwargs)  # type: ignore[arg-type]
+    store.location_events[event.id] = event
+    return event
+
+
+def schedule_reverify_slots(record: Attendance, policy: OfficeLocation) -> None:
+    count = policy.reverify_count_per_day
+    start = policy.reverify_window_start_minutes
+    span = max(policy.reverify_window_end_minutes - start, 1)
+    for index in range(count):
+        if index == 0:
+            offset = start
+        else:
+            low = start + span * index / count
+            high = start + span * (index + 1) / count
+            offset = uniform(low, high)
+        due_at = record.checked_in_at + timedelta(minutes=offset)
+        record_location_event(
+            employee_id=record.employee_id,
+            attendance_id=record.id,
+            kind="reverify",
+            at=due_at,
+            due_at=due_at,
+        )
+
+
+def expire_missed_reverify_slots(record: Attendance | None = None) -> None:
+    now = datetime.now(UTC)
+    items = location_events_for(record.id) if record else list(store.location_events.values())
+    for event in items:
+        if not is_reverify_slot_open(event) or event.due_at is None:
+            continue
+        if now >= event.due_at + timedelta(minutes=REVERIFY_GRACE_MINUTES):
+            event.anomaly = "missed_reverify"
+            event.at = now
+
+
+def pending_reverify_for(record: Attendance) -> LocationEvent | None:
+    expire_missed_reverify_slots(record)
+    now = datetime.now(UTC)
+    open_slots = [
+        event
+        for event in location_events_for(record.id)
+        if is_reverify_slot_open(event) and event.due_at and event.due_at <= now
+    ]
+    if not open_slots:
+        return None
+    return min(open_slots, key=lambda item: item.due_at or item.at)
+
+
+def pending_payload(event: LocationEvent | None) -> dict | None:
+    if not event:
+        return None
+    return {"id": event.id, "due_at": event.due_at, "kind": event.kind}
+
+
+def location_event_payload(event: LocationEvent) -> dict:
+    maps_url = (
+        f"https://www.google.com/maps?q={event.lat},{event.lng}"
+        if event.lat is not None and event.lng is not None
+        else None
+    )
+    return {
+        "id": event.id,
+        "employee_id": event.employee_id,
+        "attendance_id": event.attendance_id,
+        "kind": event.kind,
+        "at": event.at,
+        "lat": event.lat,
+        "lng": event.lng,
+        "accuracy": event.accuracy,
+        "distance_meters": event.distance_meters,
+        "inside_geofence": event.inside_geofence,
+        "anomaly": event.anomaly,
+        "due_at": event.due_at,
+        "maps_url": maps_url,
+    }
+
+
+def visible_or_404(user: Employee, employee_id: str) -> Employee:
+    employee = store.employees.get(employee_id)
+    if not employee or employee.id not in {item.id for item in visible_employees(user)}:
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+    return employee
+
+
+def alert_receipt_key(kind: str, employee_id: str, day: date) -> str:
+    return f"{kind}:{employee_id}:{day.isoformat()}"
+
+
+def emit_attendance_alert(kind: str, employee: Employee, policy: OfficeLocation) -> None:
+    today = jakarta_date()
+    key = alert_receipt_key(kind, employee.id, today)
+    if key in store.alert_receipts:
+        return
+    title, detail = ALERT_COPY[kind]
+    store.alert_receipts[key] = AlertReceipt(key, employee.id, kind, today)
+    notify(employee.id, title, detail, "/app/attendance/today")
+    if kind in {"missed_clock_in", "missed_clock_out"}:
+        send_email(
+            employee.email,
+            f"{title} — Teamku",
+            (
+                f"Halo {employee.name},\n\n{detail}\n"
+                f"Buka presensi: {app_url('/app/attendance/today')}\n"
+            ),
+        )
+    if not policy.alert_managers:
+        return
+    for recipient in store.employees.values():
+        if recipient.id == employee.id or recipient.status != "active":
+            continue
+        same_manager = recipient.role == "manager" and recipient.department == employee.department
+        if recipient.role == "hr_admin" or same_manager:
+            notify(recipient.id, title, f"{employee.name}: {detail}", "/app/attendance/today")
+
+
+def evaluate_attendance_alerts() -> None:
+    policy = current_office()
+    if not policy.alerts_enabled:
+        return
+    now = datetime.now(JAKARTA)
+    today = now.date()
+    reminder_in = datetime.combine(today, parse_hhmm(policy.clock_in_reminder_time), JAKARTA)
+    reminder_out = datetime.combine(today, parse_hhmm(policy.clock_out_reminder_time), JAKARTA)
+
+    for employee in store.employees.values():
+        if employee.status != "active":
+            continue
+        sessions = employee_sessions_on(employee.id, today)
+        open_session = next((item for item in sessions if not item.checked_out_at), None)
+        if open_session:
+            expire_missed_reverify_slots(open_session)
+
+        if now >= reminder_in and not sessions and not has_approved_leave(employee.id, today):
+            emit_attendance_alert("missed_clock_in", employee, policy)
+
+        if open_session:
+            hours_open = (datetime.now(UTC) - open_session.checked_in_at).total_seconds() / 3600
+            if now >= reminder_out or hours_open >= policy.max_open_hours:
+                emit_attendance_alert("missed_clock_out", employee, policy)
+
+        if employee.is_remote:
+            continue
+        events = [
+            item
+            for item in store.location_events.values()
+            if item.employee_id == employee.id and jakarta_date(item.at) == today
+        ]
+        if any(item.anomaly == "missed_reverify" for item in events):
+            emit_attendance_alert("limit_reverify", employee, policy)
+        if any(item.anomaly == "outside_geofence" for item in events):
+            emit_attendance_alert("limit_geofence", employee, policy)
 
 
 def _valid_coordinates(latitude: float, longitude: float) -> tuple[float, float] | None:
@@ -653,6 +944,7 @@ class InviteInput(BaseModel):
     role: str = Field(pattern="^(employee|manager|hr_admin)$")
     title: str = Field(default="Staff", min_length=2, max_length=100)
     salary: int = Field(default=8_000_000, ge=0, le=10_000_000_000)
+    is_remote: bool = False
 
 
 class AcceptInvite(BaseModel):
@@ -688,11 +980,27 @@ class CheckOut(BaseModel):
     summary: str = Field(min_length=4, max_length=1000)
 
 
+class ReverifyInput(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: float = Field(ge=0, le=10_000)
+    selfie_captured: bool
+
+
 class OfficeSettingsInput(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     radius_meters: float = Field(ge=50, le=5_000)
+    reverify_enabled: bool | None = None
+    reverify_count_per_day: int | None = Field(default=None, ge=1, le=3)
+    reverify_window_start_minutes: int | None = Field(default=None, ge=0, le=1_440)
+    reverify_window_end_minutes: int | None = Field(default=None, ge=0, le=1_440)
+    alerts_enabled: bool | None = None
+    clock_in_reminder_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    clock_out_reminder_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    max_open_hours: int | None = Field(default=None, ge=1, le=24)
+    alert_managers: bool | None = None
 
 
 class MapsUrlInput(BaseModel):
@@ -723,10 +1031,12 @@ class EmployeeInput(BaseModel):
     salary: int = Field(ge=0, le=10_000_000_000)
     # Optional initial password; when omitted a temporary one is generated.
     password: str | None = Field(default=None, min_length=8, max_length=128)
+    is_remote: bool = False
 
 
 class EmployeeUpdate(BaseModel):
-    status: str = Field(pattern="^(active|suspended|terminated)$")
+    status: str | None = Field(default=None, pattern="^(active|suspended|terminated)$")
+    is_remote: bool | None = None
 
 
 @router.post("/auth/signup")
@@ -835,6 +1145,7 @@ async def create_invite(
         salary=payload.salary,
         invited_by=user.id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
+        is_remote=payload.is_remote,
     )
     store.invitations[invitation.token] = invitation
     invite_url = app_url(f"/invite?token={invitation.token}")
@@ -899,6 +1210,7 @@ async def accept_invite(payload: AcceptInvite) -> JSONResponse:
         salary=invitation.salary,
         password_hash=hash_password(payload.password),
         tenant_id=tenant_store.tenant_id,
+        is_remote=invitation.is_remote,
     )
     store.employees[employee.id] = employee
     invitation.accepted_at = datetime.now(UTC)
@@ -1038,6 +1350,33 @@ async def employees(x_demo_user: str | None = Header(default=None)) -> dict:
     return {"items": items, "total": len(items)}
 
 
+@router.get("/employees/{employee_id}")
+async def get_employee(
+    employee_id: str, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    employee = visible_or_404(user, employee_id)
+    hide_salary = user.role == "manager"
+    return public_employee(employee, hide_salary=hide_salary)
+
+
+@router.get("/employees/{employee_id}/location-history")
+async def employee_location_history(
+    employee_id: str, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    require(user, "manager", "hr_admin")
+    employee = visible_or_404(user, employee_id)
+    events = [
+        item for item in store.location_events.values() if item.employee_id == employee.id
+    ]
+    events.sort(key=lambda item: item.at)
+    return {
+        "employee_id": employee.id,
+        "items": [location_event_payload(item) for item in events],
+    }
+
+
 @router.post("/employees")
 async def create_employee(
     payload: EmployeeInput, x_demo_user: str | None = Header(default=None)
@@ -1082,13 +1421,17 @@ async def update_employee(
     employee = store.employees.get(employee_id)
     if not employee:
         raise HTTPException(404, "Karyawan tidak ditemukan")
-    if employee.id == user.id and payload.status != "active":
-        raise HTTPException(409, "Anda tidak dapat menonaktifkan akun sendiri")
-    employee.status = payload.status
-    # Deactivated accounts must lose any active sessions immediately.
-    if payload.status != "active":
-        revoke_employee_sessions(employee.id)
-    audit("employee.status_changed", user, employee.id)
+    if payload.status is not None:
+        if employee.id == user.id and payload.status != "active":
+            raise HTTPException(409, "Anda tidak dapat menonaktifkan akun sendiri")
+        employee.status = payload.status
+        # Deactivated accounts must lose any active sessions immediately.
+        if payload.status != "active":
+            revoke_employee_sessions(employee.id)
+        audit("employee.status_changed", user, employee.id)
+    if payload.is_remote is not None:
+        employee.is_remote = payload.is_remote
+        audit("employee.remote_changed", user, employee.id)
     return public_employee(employee)
 
 
@@ -1104,7 +1447,10 @@ async def update_office_settings(
 ) -> dict:
     user = actor(x_demo_user)
     require(user, "hr_admin")
-    store.office = OfficeLocation(**payload.model_dump())
+    current = asdict(store.office)
+    current.update(payload.model_dump(exclude_unset=True))
+    validate_office_policy(current)
+    store.office = OfficeLocation(**current)
     audit("settings.office_updated", user, store.office.name)
     return office_payload()
 
@@ -1145,17 +1491,19 @@ async def office_from_maps_url(
 @router.get("/attendance/today")
 async def attendance_today(x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
-    today = datetime.now(JAKARTA).date()
-    sessions = [
-        item
-        for item in store.attendance.values()
-        if item.employee_id == user.id
-        and item.checked_in_at.astimezone(JAKARTA).date() == today
-    ]
+    evaluate_attendance_alerts()
+    today = jakarta_date()
+    sessions = employee_sessions_on(user.id, today)
     if not sessions:
-        return {"state": "not_checked_in", "session": None}
+        return {
+            "state": "not_checked_in",
+            "session": None,
+            "pending_reverification": None,
+            "is_remote": user.is_remote,
+        }
     latest = max(sessions, key=lambda item: item.checked_in_at)
     state = "completed" if latest.checked_out_at else "checked_in"
+    pending = None if latest.checked_out_at else pending_reverify_for(latest)
     return {
         "state": state,
         "session": {
@@ -1166,6 +1514,8 @@ async def attendance_today(x_demo_user: str | None = Header(default=None)) -> di
             "agenda_count": len(latest.agenda),
             "summary": latest.summary,
         },
+        "pending_reverification": pending_payload(pending),
+        "is_remote": user.is_remote,
     }
 
 
@@ -1191,7 +1541,7 @@ async def check_in(
     distance = office_distance_meters(payload.latitude, payload.longitude)
     allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters)
     office = current_office()
-    if distance > allowed_radius:
+    if not user.is_remote and distance > allowed_radius:
         raise HTTPException(
             403,
             (
@@ -1212,6 +1562,20 @@ async def check_in(
     )
     store.attendance[record.id] = record
     store.idempotency[idempotency_key] = record.id
+    record_location_event(
+        employee_id=user.id,
+        attendance_id=record.id,
+        kind="check_in",
+        at=record.checked_in_at,
+        lat=payload.latitude,
+        lng=payload.longitude,
+        accuracy=payload.accuracy_meters,
+        distance_meters=round(distance),
+        inside_geofence=distance <= allowed_radius,
+        anomaly=anomaly,
+    )
+    if office.reverify_enabled and not user.is_remote:
+        schedule_reverify_slots(record, office)
     audit("attendance.check_in", user, record.id)
     return {
         "id": record.id,
@@ -1238,8 +1602,19 @@ async def check_out(
     )
     if not record:
         raise HTTPException(409, "Tidak ada sesi kehadiran terbuka")
+    expire_missed_reverify_slots(record)
+    for event in location_events_for(record.id):
+        if is_reverify_slot_open(event):
+            event.anomaly = "missed_reverify"
+            event.at = datetime.now(UTC)
     record.checked_out_at = datetime.now(UTC)
     record.summary = payload.summary
+    record_location_event(
+        employee_id=user.id,
+        attendance_id=record.id,
+        kind="check_out",
+        at=record.checked_out_at,
+    )
     audit("attendance.check_out", user, record.id)
     return {
         "id": record.id,
@@ -1248,6 +1623,53 @@ async def check_out(
             (record.checked_out_at - record.checked_in_at).total_seconds() / 3600, 2
         ),
     }
+
+
+@router.post("/attendance/reverify")
+async def reverify(
+    payload: ReverifyInput, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    today = jakarta_date()
+    record = next(
+        (item for item in employee_sessions_on(user.id, today) if not item.checked_out_at),
+        None,
+    )
+    if not record:
+        raise HTTPException(409, "Tidak ada sesi kehadiran terbuka")
+    pending = pending_reverify_for(record)
+    distance = office_distance_meters(payload.latitude, payload.longitude)
+    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters)
+    now = datetime.now(UTC)
+
+    if user.is_remote:
+        if pending:
+            pending.lat = payload.latitude
+            pending.lng = payload.longitude
+            pending.accuracy = payload.accuracy_meters
+            pending.at = now
+            pending.distance_meters = round(distance)
+            pending.inside_geofence = True
+            pending.anomaly = None
+            audit("attendance.reverify", user, pending.id)
+            return location_event_payload(pending) | {"skipped": True}
+        return {"skipped": True, "pending_reverification": None}
+
+    if not payload.selfie_captured:
+        raise HTTPException(422, "Selfie kamera langsung wajib untuk kebijakan ini")
+    if not pending:
+        raise HTTPException(409, "Tidak ada re-verifikasi yang menunggu")
+
+    inside = distance <= allowed_radius
+    pending.lat = payload.latitude
+    pending.lng = payload.longitude
+    pending.accuracy = payload.accuracy_meters
+    pending.at = now
+    pending.distance_meters = round(distance)
+    pending.inside_geofence = inside
+    pending.anomaly = None if inside else "outside_geofence"
+    audit("attendance.reverify", user, pending.id)
+    return location_event_payload(pending)
 
 
 @router.get("/leave-requests")
@@ -1471,6 +1893,7 @@ async def payslips(x_demo_user: str | None = Header(default=None)) -> dict:
 @router.get("/notifications")
 async def notifications(x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
+    evaluate_attendance_alerts()
     items = [item for item in store.notifications.values() if item.user_id == user.id]
     items.sort(key=lambda entry: entry.created_at, reverse=True)
     return {

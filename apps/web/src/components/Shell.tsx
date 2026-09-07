@@ -13,6 +13,7 @@ type User = {id:string;name:string;email:string;role:Role;department:string;titl
 type Tenant = {id:string;name:string;slug:string};
 type Office = {name:string};
 type Notification = {id:string;title:string;detail:string;target:string;read:boolean};
+type TodayAttendance = {pending_reverification:null|{id:string;due_at:string}};
 type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"|"pin"];
 
 const workspace: NavItem[] = [
@@ -35,6 +36,7 @@ export function Shell({children}:{children:React.ReactNode}) {
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [intelligenceOpen,setIntelligenceOpen]=useState(false);
   const [signingOut,setSigningOut]=useState(false);
+  const [pendingReverify,setPendingReverify]=useState(false);
 
   useEffect(()=>{
     const token=localStorage.getItem("movon_user")||undefined;
@@ -46,8 +48,13 @@ export function Shell({children}:{children:React.ReactNode}) {
       if(!token){router.replace("/login");return}
       setBootstrapError(reason instanceof Error?reason.message:"Workspace gagal dimuat.");
     });
-    api<{items:Notification[]}>("/notifications",{},token).then(inbox=>setNotifications(inbox.items)).catch(()=>setNotifications([]));
+    const loadInbox=()=>api<{items:Notification[]}>("/notifications",{},token).then(inbox=>setNotifications(inbox.items)).catch(()=>setNotifications([]));
+    const loadToday=()=>api<TodayAttendance>("/attendance/today",{},token).then(today=>setPendingReverify(Boolean(today.pending_reverification))).catch(()=>setPendingReverify(false));
+    loadInbox();
+    loadToday();
     api<Office>("/settings/office",{},token).then(office=>setOfficeName(office.name)).catch(()=>setOfficeName("Kantor"));
+    const timer=window.setInterval(()=>{loadInbox();loadToday()},60_000);
+    return()=>window.clearInterval(timer);
   },[router,bootstrapAttempt]);
 
   const nav=useMemo(()=>{
@@ -110,7 +117,18 @@ export function Shell({children}:{children:React.ReactNode}) {
         </div>
         {searchOpen&&<div className="topbar-popover search-popover"><b>Pindah cepat</b>{allNav.map(([label,href,icon])=><Link href={href} key={href} onClick={()=>setSearchOpen(false)}><Icon name={icon}/><span>{label}</span></Link>)}</div>}
       </header>
-      <main className="content"><div className="route-content" key={pathname}>{children}</div></main>
+      <main className="content">
+        {pendingReverify&&!pathname.startsWith("/app/attendance/today")&&(
+          <div className="reverify-banner">
+            <div>
+              <b>Re-verifikasi lokasi</b>
+              <span>Ada permintaan verifikasi lokasi yang menunggu.</span>
+            </div>
+            <Link href="/app/attendance/today">Buka presensi</Link>
+          </div>
+        )}
+        <div className="route-content" key={pathname}>{children}</div>
+      </main>
       <nav className="mobile-nav">{links(nav.slice(0,4))}</nav>
       {notificationsOpen&&(
         <div className="dialog-backdrop" role="presentation" onClick={()=>setNotificationsOpen(false)}>

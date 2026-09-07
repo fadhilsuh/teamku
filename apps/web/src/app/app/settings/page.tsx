@@ -7,15 +7,43 @@ import {NotificationDialog,NotificationDialogState} from "../../../components/No
 import {api} from "../../../lib/api";
 import {googleMapsEmbedUrl,googleMapsOpenUrl,isGoogleMapsShortUrl,parseGoogleMapsLocation} from "../../../lib/googleMaps";
 
-type OfficeSettings={name:string;latitude:number;longitude:number;radius_meters:number};
+type AttendanceSettings={
+  name:string;
+  latitude:number;
+  longitude:number;
+  radius_meters:number;
+  reverify_enabled:boolean;
+  reverify_count_per_day:number;
+  reverify_window_start_minutes:number;
+  reverify_window_end_minutes:number;
+  alerts_enabled:boolean;
+  clock_in_reminder_time:string;
+  clock_out_reminder_time:string;
+  max_open_hours:number;
+  alert_managers:boolean;
+};
 type User={role:string};
 type MapsParseResult={latitude:number;longitude:number;resolved_url:string;maps_url:string};
 
-const empty:OfficeSettings={name:"Jakarta HQ",latitude:-6.2,longitude:106.8166,radius_meters:300};
+const empty:AttendanceSettings={
+  name:"Jakarta HQ",
+  latitude:-6.2,
+  longitude:106.8166,
+  radius_meters:300,
+  reverify_enabled:false,
+  reverify_count_per_day:1,
+  reverify_window_start_minutes:60,
+  reverify_window_end_minutes:420,
+  alerts_enabled:false,
+  clock_in_reminder_time:"09:15",
+  clock_out_reminder_time:"18:15",
+  max_open_hours:10,
+  alert_managers:false,
+};
 
 export default function SettingsPage(){
   const router=useRouter();
-  const [form,setForm]=useState<OfficeSettings>(empty);
+  const [form,setForm]=useState<AttendanceSettings>(empty);
   const [mapsLink,setMapsLink]=useState("");
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -29,10 +57,10 @@ export default function SettingsPage(){
     const auth=token();
     Promise.all([
       api<{user:User}>("/me",{},auth),
-      api<OfficeSettings>("/settings/office",{},auth),
+      api<AttendanceSettings>("/settings/office",{},auth),
     ]).then(([profile,office])=>{
       if(profile.user.role!=="hr_admin"){router.replace("/app/overview");return}
-      setForm(office);
+      setForm({...empty,...office});
       setMapsLink(googleMapsOpenUrl(office.latitude,office.longitude));
       setLoading(false);
     }).catch(reason=>{
@@ -41,22 +69,35 @@ export default function SettingsPage(){
     });
   },[router]);
 
-  async function save(){
+  async function save(successTitle:string,successMessage:string){
     if(form.name.trim().length<2){notify("error","Nama lokasi belum lengkap","Nama lokasi kantor wajib diisi.");return}
+    if(form.reverify_window_end_minutes<=form.reverify_window_start_minutes){
+      notify("error","Jendela re-verifikasi tidak valid","Waktu berakhir harus lebih besar dari waktu mulai.");
+      return;
+    }
     setBusy(true);
     try{
-      const saved=await api<OfficeSettings>("/settings/office",{
+      const saved=await api<AttendanceSettings>("/settings/office",{
         method:"PUT",
         body:JSON.stringify({
           name:form.name.trim(),
           latitude:Number(form.latitude),
           longitude:Number(form.longitude),
           radius_meters:Number(form.radius_meters),
+          reverify_enabled:form.reverify_enabled,
+          reverify_count_per_day:Number(form.reverify_count_per_day),
+          reverify_window_start_minutes:Number(form.reverify_window_start_minutes),
+          reverify_window_end_minutes:Number(form.reverify_window_end_minutes),
+          alerts_enabled:form.alerts_enabled,
+          clock_in_reminder_time:form.clock_in_reminder_time,
+          clock_out_reminder_time:form.clock_out_reminder_time,
+          max_open_hours:Number(form.max_open_hours),
+          alert_managers:form.alert_managers,
         }),
       },token());
-      setForm(saved);
+      setForm({...empty,...saved});
       setMapsLink(googleMapsOpenUrl(saved.latitude,saved.longitude));
-      notify("success","Lokasi kantor diperbarui","Lokasi kantor berhasil diperbarui. Aturan check-in langsung memakai titik ini.");
+      notify("success",successTitle,successMessage);
     }catch(reason){
       notify("error","Pengaturan gagal disimpan",reason instanceof Error?reason.message:"Pengaturan gagal disimpan.");
     }finally{setBusy(false)}
@@ -121,72 +162,137 @@ export default function SettingsPage(){
       <div>
         <p className="eyebrow">Workspace settings</p>
         <h1>Pengaturan</h1>
-        <p>Kelola titik lokasi kantor yang dipakai untuk verifikasi geofence check-in.</p>
+        <p>Kelola lokasi kantor, re-verifikasi lokasi, dan pengingat kehadiran dari satu tempat.</p>
       </div>
     </section>
     {loading?<div className="panel settings-panel"><p className="muted">Memuat pengaturan…</p></div>:(
-      <section className="settings-layout">
+      <div className="settings-stack">
+        <section className="settings-layout">
+          <article className="panel settings-panel">
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Office geofence</p>
+                <h2>Lokasi kantor</h2>
+              </div>
+            </div>
+            <p className="settings-copy">Hanya HR Admin yang dapat mengubah titik ini. Tempel tautan Share dari Google Maps untuk mengisi koordinat otomatis.</p>
+
+            <div className="maps-import">
+              <label className="maps-import-field">
+                <span>Tautan Google Maps</span>
+                <input
+                  value={mapsLink}
+                  onChange={event=>setMapsLink(event.target.value)}
+                  placeholder="Tempel link Share Google Maps atau -6.2, 106.8166"
+                />
+              </label>
+              <button type="button" className="secondary-button" disabled={busy} onClick={applyMapsLink}>
+                <Icon name="pin"/>Ambil koordinat
+              </button>
+            </div>
+
+            <div className="form-grid settings-form">
+              <label>Nama lokasi<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})} placeholder="Contoh: Jakarta HQ"/></label>
+              <label>Radius check-in (meter)<input type="number" min={50} max={5000} step={10} value={form.radius_meters} onChange={event=>setForm({...form,radius_meters:Number(event.target.value)})}/></label>
+              <label>Latitude<input type="number" step="0.000001" value={form.latitude} onChange={event=>setForm({...form,latitude:Number(event.target.value)})}/></label>
+              <label>Longitude<input type="number" step="0.000001" value={form.longitude} onChange={event=>setForm({...form,longitude:Number(event.target.value)})}/></label>
+            </div>
+            <div className="settings-actions">
+              <button type="button" className="secondary-button" disabled={busy} onClick={useCurrentLocation}><Icon name="pin"/>Gunakan lokasi saya</button>
+              <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Lokasi kantor diperbarui","Lokasi kantor berhasil diperbarui. Aturan check-in langsung memakai titik ini.")}>{busy?"Menyimpan…":"Simpan lokasi kantor"}</button>
+            </div>
+          </article>
+
+          <aside className="panel settings-side">
+            <p className="eyebrow">Preview</p>
+            <h2>{form.name||"Lokasi kantor"}</h2>
+            <div className="maps-frame">
+              <iframe title={`Peta ${form.name}`} src={embedUrl} loading="lazy" referrerPolicy="no-referrer-when-downgrade"/>
+            </div>
+            <dl className="settings-preview">
+              <div><dt>Koordinat</dt><dd>{form.latitude}, {form.longitude}</dd></div>
+              <div><dt>Radius</dt><dd>{form.radius_meters} m</dd></div>
+              <div><dt>Kebijakan</dt><dd>Check-in di luar radius ditolak untuk pekerja kantor</dd></div>
+            </dl>
+            <div className="settings-actions maps-share-actions">
+              <a className="secondary-button" href={mapsUrl} target="_blank" rel="noreferrer">
+                <Icon name="pin"/>Buka di Google Maps
+              </a>
+              <button type="button" className="secondary-button" onClick={copyMapsLink}>Salin tautan</button>
+            </div>
+            <div className="location-policy settings-policy">
+              <Icon name="pin"/>
+              <span>
+                <b>Berlaku segera</b>
+                <small>Perubahan langsung dipakai pada check-in berikutnya.</small>
+              </span>
+            </div>
+          </aside>
+        </section>
+
         <article className="panel settings-panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">Office geofence</p>
-              <h2>Lokasi kantor</h2>
+              <p className="eyebrow">Location monitoring</p>
+              <h2>Re-verifikasi lokasi</h2>
             </div>
           </div>
-          <p className="settings-copy">Hanya HR Admin yang dapat mengubah titik ini. Tempel tautan Share dari Google Maps untuk mengisi koordinat otomatis.</p>
-
-          <div className="maps-import">
-            <label className="maps-import-field">
-              <span>Tautan Google Maps</span>
-              <input
-                value={mapsLink}
-                onChange={event=>setMapsLink(event.target.value)}
-                placeholder="Tempel link Share Google Maps atau -6.2, 106.8166"
-              />
-            </label>
-            <button type="button" className="secondary-button" disabled={busy} onClick={applyMapsLink}>
-              <Icon name="pin"/>Ambil koordinat
-            </button>
-          </div>
-
+          <p className="settings-copy">Hanya berlaku untuk karyawan kantor. Pekerja remote tidak diminta verifikasi ulang berdasarkan geofence. Sesi yang sudah terbuka tetap memakai jadwal yang dihitung saat check-in.</p>
+          <label className={`location-consent ${form.reverify_enabled?"approved":""}`}>
+            <input type="checkbox" checked={form.reverify_enabled} onChange={event=>setForm({...form,reverify_enabled:event.target.checked})}/>
+            <span>
+              <b>Aktifkan re-verifikasi</b>
+              <small>Setelah check-in, pekerja kantor diminta memverifikasi lokasi lagi sesuai jadwal.</small>
+            </span>
+          </label>
           <div className="form-grid settings-form">
-            <label>Nama lokasi<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})} placeholder="Contoh: Jakarta HQ"/></label>
-            <label>Radius check-in (meter)<input type="number" min={50} max={5000} step={10} value={form.radius_meters} onChange={event=>setForm({...form,radius_meters:Number(event.target.value)})}/></label>
-            <label>Latitude<input type="number" step="0.000001" value={form.latitude} onChange={event=>setForm({...form,latitude:Number(event.target.value)})}/></label>
-            <label>Longitude<input type="number" step="0.000001" value={form.longitude} onChange={event=>setForm({...form,longitude:Number(event.target.value)})}/></label>
+            <label>Jumlah per hari
+              <select value={form.reverify_count_per_day} onChange={event=>setForm({...form,reverify_count_per_day:Number(event.target.value)})}>
+                <option value={1}>1 kali</option>
+                <option value={2}>2 kali</option>
+                <option value={3}>3 kali</option>
+              </select>
+            </label>
+            <label>Mulai setelah check-in (menit)<input type="number" min={0} max={1440} value={form.reverify_window_start_minutes} onChange={event=>setForm({...form,reverify_window_start_minutes:Number(event.target.value)})}/></label>
+            <label>Berakhir setelah check-in (menit)<input type="number" min={1} max={1440} value={form.reverify_window_end_minutes} onChange={event=>setForm({...form,reverify_window_end_minutes:Number(event.target.value)})}/></label>
           </div>
           <div className="settings-actions">
-            <button type="button" className="secondary-button" disabled={busy} onClick={useCurrentLocation}><Icon name="pin"/>Gunakan lokasi saya</button>
-            <button type="button" className="primary-action auto-width" disabled={busy} onClick={save}>{busy?"Menyimpan…":"Simpan lokasi kantor"}</button>
+            <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Re-verifikasi diperbarui","Pengaturan re-verifikasi lokasi tersimpan. Perubahan berlaku untuk check-in berikutnya.")}>{busy?"Menyimpan…":"Simpan re-verifikasi"}</button>
           </div>
         </article>
 
-        <aside className="panel settings-side">
-          <p className="eyebrow">Preview</p>
-          <h2>{form.name||"Lokasi kantor"}</h2>
-          <div className="maps-frame">
-            <iframe title={`Peta ${form.name}`} src={embedUrl} loading="lazy" referrerPolicy="no-referrer-when-downgrade"/>
+        <article className="panel settings-panel">
+          <div className="panel-head">
+            <div>
+              <p className="eyebrow">Attendance alerts</p>
+              <h2>Notifikasi & alert kehadiran</h2>
+            </div>
           </div>
-          <dl className="settings-preview">
-            <div><dt>Koordinat</dt><dd>{form.latitude}, {form.longitude}</dd></div>
-            <div><dt>Radius</dt><dd>{form.radius_meters} m</dd></div>
-            <div><dt>Kebijakan</dt><dd>Check-in di luar radius ditolak otomatis</dd></div>
-          </dl>
-          <div className="settings-actions maps-share-actions">
-            <a className="secondary-button" href={mapsUrl} target="_blank" rel="noreferrer">
-              <Icon name="pin"/>Buka di Google Maps
-            </a>
-            <button type="button" className="secondary-button" onClick={copyMapsLink}>Salin tautan</button>
-          </div>
-          <div className="location-policy settings-policy">
-            <Icon name="pin"/>
+          <p className="settings-copy">Pengingat clock-in/out berlaku untuk remote dan kantor. Alert geofence dan re-verifikasi hanya untuk pekerja kantor. Jam memakai zona waktu Asia/Jakarta.</p>
+          <label className={`location-consent ${form.alerts_enabled?"approved":""}`}>
+            <input type="checkbox" checked={form.alerts_enabled} onChange={event=>setForm({...form,alerts_enabled:event.target.checked})}/>
             <span>
-              <b>Berlaku segera</b>
-              <small>Perubahan langsung dipakai pada check-in berikutnya.</small>
+              <b>Aktifkan pengingat kehadiran</b>
+              <small>Sistem mengirim notifikasi in-app saat karyawan lupa clock-in/out atau melewati batas.</small>
             </span>
+          </label>
+          <div className="form-grid settings-form">
+            <label>Reminder clock-in<input type="time" value={form.clock_in_reminder_time} onChange={event=>setForm({...form,clock_in_reminder_time:event.target.value})}/></label>
+            <label>Reminder clock-out<input type="time" value={form.clock_out_reminder_time} onChange={event=>setForm({...form,clock_out_reminder_time:event.target.value})}/></label>
+            <label>Batas sesi terbuka (jam)<input type="number" min={1} max={24} value={form.max_open_hours} onChange={event=>setForm({...form,max_open_hours:Number(event.target.value)})}/></label>
           </div>
-        </aside>
-      </section>
+          <label className={`location-consent ${form.alert_managers?"approved":""}`}>
+            <input type="checkbox" checked={form.alert_managers} onChange={event=>setForm({...form,alert_managers:event.target.checked})}/>
+            <span>
+              <b>Kirim juga ke manager/HR</b>
+              <small>Manager departemen dan HR Admin menerima salinan alert yang sama.</small>
+            </span>
+          </label>
+          <div className="settings-actions">
+            <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Pengingat kehadiran diperbarui","Pengaturan notifikasi dan alert kehadiran tersimpan.")}>{busy?"Menyimpan…":"Simpan pengingat kehadiran"}</button>
+          </div>
+        </article>
+      </div>
     )}
   </>;
 }

@@ -28,11 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from movon_hr.core.settings import settings
 from movon_hr.core.tenancy import DEMO_TENANT_ID, bind_tenant, clear_registry, put_store
 from movon_hr.modules.api import (
+    AlertReceipt,
     Attendance,
     DemoStore,
     Employee,
     Invitation,
     LeaveRequest,
+    LocationEvent,
     Notification,
     OfficeLocation,
     PasswordReset,
@@ -64,6 +66,7 @@ employees_table = Table(
     Column("status", String, nullable=False),
     Column("salary", Integer, nullable=False),
     Column("password_hash", String, nullable=False, server_default=""),
+    Column("is_remote", Boolean, nullable=False, server_default="false"),
 )
 
 attendance_table = Table(
@@ -160,6 +163,15 @@ office_table = Table(
     Column("latitude", Float, nullable=False),
     Column("longitude", Float, nullable=False),
     Column("radius_meters", Float, nullable=False),
+    Column("reverify_enabled", Boolean, nullable=False, server_default="false"),
+    Column("reverify_count_per_day", Integer, nullable=False, server_default="1"),
+    Column("reverify_window_start_minutes", Integer, nullable=False, server_default="60"),
+    Column("reverify_window_end_minutes", Integer, nullable=False, server_default="420"),
+    Column("alerts_enabled", Boolean, nullable=False, server_default="false"),
+    Column("clock_in_reminder_time", String, nullable=False, server_default="09:15"),
+    Column("clock_out_reminder_time", String, nullable=False, server_default="18:15"),
+    Column("max_open_hours", Integer, nullable=False, server_default="10"),
+    Column("alert_managers", Boolean, nullable=False, server_default="false"),
 )
 
 invitations_table = Table(
@@ -176,6 +188,7 @@ invitations_table = Table(
     Column("invited_by", String, nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("accepted_at", DateTime(timezone=True), nullable=True),
+    Column("is_remote", Boolean, nullable=False, server_default="false"),
 )
 
 password_resets_table = Table(
@@ -186,6 +199,34 @@ password_resets_table = Table(
     Column("employee_id", String, nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("used_at", DateTime(timezone=True), nullable=True),
+)
+
+location_events_table = Table(
+    "location_events",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False, index=True),
+    Column("employee_id", String, nullable=False),
+    Column("attendance_id", String, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("lat", Float, nullable=True),
+    Column("lng", Float, nullable=True),
+    Column("accuracy", Float, nullable=True),
+    Column("distance_meters", Float, nullable=True),
+    Column("inside_geofence", Boolean, nullable=True),
+    Column("anomaly", String, nullable=True),
+    Column("due_at", DateTime(timezone=True), nullable=True),
+)
+
+alert_receipts_table = Table(
+    "alert_receipts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False, index=True),
+    Column("employee_id", String, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("local_date", Date, nullable=False),
 )
 
 _engine: AsyncEngine | None = None
@@ -249,6 +290,7 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     salary=row["salary"],
                     password_hash=row["password_hash"],
                     tenant_id=row["tenant_id"],
+                    is_remote=bool(row.get("is_remote") or False),
                 )
                 for row in (
                     await conn.execute(
@@ -368,6 +410,19 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     latitude=office_row["latitude"],
                     longitude=office_row["longitude"],
                     radius_meters=office_row["radius_meters"],
+                    reverify_enabled=bool(office_row.get("reverify_enabled") or False),
+                    reverify_count_per_day=int(office_row.get("reverify_count_per_day") or 1),
+                    reverify_window_start_minutes=int(
+                        office_row.get("reverify_window_start_minutes") or 60
+                    ),
+                    reverify_window_end_minutes=int(
+                        office_row.get("reverify_window_end_minutes") or 420
+                    ),
+                    alerts_enabled=bool(office_row.get("alerts_enabled") or False),
+                    clock_in_reminder_time=office_row.get("clock_in_reminder_time") or "09:15",
+                    clock_out_reminder_time=office_row.get("clock_out_reminder_time") or "18:15",
+                    max_open_hours=int(office_row.get("max_open_hours") or 10),
+                    alert_managers=bool(office_row.get("alert_managers") or False),
                 )
             item.invitations = {
                 row["token"]: Invitation(
@@ -382,6 +437,7 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     invited_by=row["invited_by"],
                     expires_at=row["expires_at"],
                     accepted_at=row["accepted_at"],
+                    is_remote=bool(row.get("is_remote") or False),
                 )
                 for row in (
                     await conn.execute(
@@ -400,6 +456,40 @@ async def load_store(store: DemoStore | None = None) -> bool:
                 for row in (
                     await conn.execute(
                         select(password_resets_table).where(password_resets_table.c.tenant_id == tid)
+                    )
+                ).mappings()
+            }
+            item.location_events = {
+                row["id"]: LocationEvent(
+                    id=row["id"],
+                    employee_id=row["employee_id"],
+                    attendance_id=row["attendance_id"],
+                    kind=row["kind"],
+                    at=row["at"],
+                    lat=row["lat"],
+                    lng=row["lng"],
+                    accuracy=row["accuracy"],
+                    distance_meters=row["distance_meters"],
+                    inside_geofence=row["inside_geofence"],
+                    anomaly=row["anomaly"],
+                    due_at=row["due_at"],
+                )
+                for row in (
+                    await conn.execute(
+                        select(location_events_table).where(location_events_table.c.tenant_id == tid)
+                    )
+                ).mappings()
+            }
+            item.alert_receipts = {
+                row["id"]: AlertReceipt(
+                    id=row["id"],
+                    employee_id=row["employee_id"],
+                    kind=row["kind"],
+                    local_date=row["local_date"],
+                )
+                for row in (
+                    await conn.execute(
+                        select(alert_receipts_table).where(alert_receipts_table.c.tenant_id == tid)
                     )
                 ).mappings()
             }
@@ -426,6 +516,8 @@ async def save_store(store: DemoStore) -> None:
         await conn.execute(delete(office_table).where(office_table.c.tenant_id == tid))
         await conn.execute(delete(invitations_table).where(invitations_table.c.tenant_id == tid))
         await conn.execute(delete(password_resets_table).where(password_resets_table.c.tenant_id == tid))
+        await conn.execute(delete(location_events_table).where(location_events_table.c.tenant_id == tid))
+        await conn.execute(delete(alert_receipts_table).where(alert_receipts_table.c.tenant_id == tid))
         await conn.execute(delete(tenants_table).where(tenants_table.c.id == tid))
 
         await conn.execute(
@@ -498,6 +590,16 @@ async def save_store(store: DemoStore) -> None:
             await conn.execute(
                 password_resets_table.insert(),
                 [asdict(item) for item in store.password_resets.values()],
+            )
+        if store.location_events:
+            await conn.execute(
+                location_events_table.insert(),
+                [_with_tenant(asdict(item), tid) for item in store.location_events.values()],
+            )
+        if store.alert_receipts:
+            await conn.execute(
+                alert_receipts_table.insert(),
+                [_with_tenant(asdict(item), tid) for item in store.alert_receipts.values()],
             )
 
 

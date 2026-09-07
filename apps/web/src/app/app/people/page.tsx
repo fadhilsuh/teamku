@@ -1,23 +1,206 @@
 "use client";
+
 import {useEffect,useMemo,useState} from "react";
+import Link from "next/link";
+import {useRouter} from "next/navigation";
 import {NotificationDialog,NotificationDialogState} from "../../../components/NotificationDialog";
 import {api} from "../../../lib/api";
 
-type Employee={id:string;name:string;email:string;role:string;department:string;title:string;status:string;salary?:number|null};
+type Employee={
+  id:string;
+  name:string;
+  email:string;
+  role:string;
+  department:string;
+  title:string;
+  status:string;
+  salary?:number|null;
+  is_remote?:boolean;
+};
 type User={role:string};
-const emptyForm={name:"",email:"",department:"Engineering",title:"Staff",role:"employee",salary:"8000000"};
+
+const emptyForm={name:"",email:"",department:"Engineering",title:"Staff",role:"employee",salary:"8000000",is_remote:false};
 
 export default function People(){
-  const [items,setItems]=useState<Employee[]>([]),[query,setQuery]=useState(""),[department,setDepartment]=useState("all"),[notification,setNotification]=useState<NotificationDialogState|null>(null),[showForm,setShowForm]=useState(false),[busy,setBusy]=useState(false),[form,setForm]=useState(emptyForm),[role,setRole]=useState("");
+  const router=useRouter();
+  const [items,setItems]=useState<Employee[]>([]);
+  const [query,setQuery]=useState("");
+  const [department,setDepartment]=useState("all");
+  const [notification,setNotification]=useState<NotificationDialogState|null>(null);
+  const [showForm,setShowForm]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [form,setForm]=useState(emptyForm);
+  const [role,setRole]=useState("");
   const token=()=>localStorage.getItem("movon_user")||undefined;
   const notify=(type:NotificationDialogState["type"],title:string,message:string)=>setNotification({type,title,message});
-  const load=()=>Promise.all([api<{items:Employee[]}>("/employees",{},token()),api<{user:User}>("/me",{},token())]).then(([people,profile])=>{setItems(people.items);setRole(profile.user.role)}).catch(reason=>notify("error","Direktori gagal dimuat",reason instanceof Error?reason.message:"Data karyawan gagal dimuat."));
+  const load=()=>Promise.all([
+    api<{items:Employee[]}>("/employees",{},token()),
+    api<{user:User}>("/me",{},token()),
+  ]).then(([people,profile])=>{
+    setItems(people.items);
+    setRole(profile.user.role);
+  }).catch(reason=>notify("error","Direktori gagal dimuat",reason instanceof Error?reason.message:"Data karyawan gagal dimuat."));
+
   useEffect(()=>{load()},[]);
+
   const departments=useMemo(()=>Array.from(new Set(items.map(item=>item.department))).sort(),[items]);
-  const visible=useMemo(()=>items.filter(item=>(department==="all"||item.department===department)&&`${item.name} ${item.email} ${item.title}`.toLowerCase().includes(query.toLowerCase())),[items,department,query]);
-  async function create(){if(!form.name||!form.email){notify("error","Data belum lengkap","Nama dan email kerja wajib diisi.");return}setBusy(true);try{await api("/employees",{method:"POST",body:JSON.stringify({...form,salary:Number(form.salary)})},token());setForm(emptyForm);setShowForm(false);notify("success","Karyawan ditambahkan","Karyawan baru berhasil ditambahkan.");await load()}catch(reason){notify("error","Data gagal disimpan",reason instanceof Error?reason.message:"Data gagal disimpan")}finally{setBusy(false)}}
-  async function invite(){if(!form.name||!form.email){notify("error","Data belum lengkap","Nama dan email kerja wajib diisi.");return}setBusy(true);try{const result=await api<{invite_url:string}>("/invites",{method:"POST",body:JSON.stringify({...form,salary:Number(form.salary)})},token());setForm(emptyForm);setShowForm(false);notify("success","Undangan terkirim",`Tautan aktivasi: ${result.invite_url}`);await load()}catch(reason){notify("error","Undangan gagal dikirim",reason instanceof Error?reason.message:"Undangan gagal dikirim")}finally{setBusy(false)}}
-  async function toggleStatus(employee:Employee){setBusy(true);try{await api(`/employees/${employee.id}`,{method:"PATCH",body:JSON.stringify({status:employee.status==="active"?"suspended":"active"})},token());notify("success","Status diperbarui",`Status ${employee.name} berhasil diperbarui.`);await load()}catch(reason){notify("error","Status gagal diperbarui",reason instanceof Error?reason.message:"Status gagal diperbarui")}finally{setBusy(false)}}
-  return <><section className="page-heading"><div><p className="eyebrow">People directory</p><h1>Direktori Karyawan</h1><p>Cari anggota tim, lihat struktur, dan kelola status kerja sesuai izin.</p></div>{role==="hr_admin"&&<button className="primary-action auto-width" onClick={()=>setShowForm(true)}>+ Tambah karyawan</button>}</section><div className="filter-bar"><label className="search-field"><span>Cari karyawan</span><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Nama, email, atau jabatan"/></label><label><span>Departemen</span><select value={department} onChange={event=>setDepartment(event.target.value)}><option value="all">Semua departemen</option>{departments.map(item=><option key={item}>{item}</option>)}</select></label><div className="filter-summary"><b>{visible.length}</b><span>dari {items.length} karyawan</span></div></div><div className="card table-card"><div className="table-wrap"><table className="table"><thead><tr><th>Karyawan</th><th>Departemen</th><th>Jabatan</th><th>Peran</th><th>Status</th><th>Gaji</th><th>Aksi</th></tr></thead><tbody>{visible.map((employee,index)=><tr key={employee.id}><td><div className="employee-cell"><span className={`avatar avatar-${index%3}`}>{employee.name.split(" ").map(part=>part[0]).slice(0,2).join("")}</span><span><b>{employee.name}</b><small>{employee.email}</small></span></div></td><td>{employee.department}</td><td>{employee.title}</td><td>{employee.role==="hr_admin"?"HR Admin":employee.role==="manager"?"Manager":"Employee"}</td><td><span className={`status ${employee.status}`}>{employee.status==="active"?"Aktif":employee.status==="suspended"?"Ditangguhkan":"Berakhir"}</span></td><td>{employee.salary!=null?formatMoney(employee.salary):"Tidak berwenang"}</td><td>{role==="hr_admin"&&employee.id!=="e-hr"?<button className="text-button" disabled={busy} onClick={()=>toggleStatus(employee)}>{employee.status==="active"?"Tangguhkan":"Aktifkan"}</button>:<span className="muted">—</span>}</td></tr>)}</tbody></table></div>{visible.length===0&&<div className="feature-empty"><span>⌕</span><h2>Tidak ada hasil</h2><p>Ubah pencarian atau filter departemen.</p></div>}</div>{showForm&&<div className="dialog-backdrop"><section className="decision-dialog employee-dialog" role="dialog" aria-modal="true" aria-labelledby="employee-title"><p className="eyebrow">Employee master</p><h2 id="employee-title">Tambah karyawan</h2><div className="form-grid"><label>Nama lengkap<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})}/></label><label>Email kerja<input type="email" value={form.email} onChange={event=>setForm({...form,email:event.target.value})}/></label><label>Departemen<select value={form.department} onChange={event=>setForm({...form,department:event.target.value})}>{["Management","Human Resources","Product","Engineering","Creative","Sales","Operations","Finance"].map(item=><option key={item}>{item}</option>)}</select></label><label>Jabatan<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})}/></label><label>Peran<select value={form.role} onChange={event=>setForm({...form,role:event.target.value})}><option value="employee">Employee</option><option value="manager">Manager</option><option value="hr_admin">HR Admin</option></select></label><label>Gaji bulanan<input type="number" min="0" value={form.salary} onChange={event=>setForm({...form,salary:event.target.value})}/></label></div><div className="dialog-actions"><button className="secondary-button" onClick={()=>setShowForm(false)}>Batal</button><button className="secondary-button" disabled={busy} onClick={create}>{busy?"Menyimpan…":"Simpan langsung"}</button><button className="primary-action auto-width" disabled={busy} onClick={invite}>{busy?"Mengirim…":"Undang via email"}</button></div></section></div>}<NotificationDialog notification={notification} onClose={()=>setNotification(null)}/></>;
+  const visible=useMemo(
+    ()=>items.filter(item=>(department==="all"||item.department===department)&&`${item.name} ${item.email} ${item.title}`.toLowerCase().includes(query.toLowerCase())),
+    [items,department,query],
+  );
+
+  function payload(){
+    return {...form,salary:Number(form.salary),is_remote:form.is_remote};
+  }
+
+  async function create(){
+    if(!form.name||!form.email){notify("error","Data belum lengkap","Nama dan email kerja wajib diisi.");return}
+    setBusy(true);
+    try{
+      await api("/employees",{method:"POST",body:JSON.stringify(payload())},token());
+      setForm(emptyForm);
+      setShowForm(false);
+      notify("success","Karyawan ditambahkan","Karyawan baru berhasil ditambahkan.");
+      await load();
+    }catch(reason){
+      notify("error","Data gagal disimpan",reason instanceof Error?reason.message:"Data gagal disimpan");
+    }finally{setBusy(false)}
+  }
+
+  async function invite(){
+    if(!form.name||!form.email){notify("error","Data belum lengkap","Nama dan email kerja wajib diisi.");return}
+    setBusy(true);
+    try{
+      const result=await api<{invite_url:string}>("/invites",{method:"POST",body:JSON.stringify(payload())},token());
+      setForm(emptyForm);
+      setShowForm(false);
+      notify("success","Undangan terkirim",`Tautan aktivasi: ${result.invite_url}`);
+      await load();
+    }catch(reason){
+      notify("error","Undangan gagal dikirim",reason instanceof Error?reason.message:"Undangan gagal dikirim");
+    }finally{setBusy(false)}
+  }
+
+  async function toggleStatus(employee:Employee){
+    setBusy(true);
+    try{
+      await api(`/employees/${employee.id}`,{method:"PATCH",body:JSON.stringify({status:employee.status==="active"?"suspended":"active"})},token());
+      notify("success","Status diperbarui",`Status ${employee.name} berhasil diperbarui.`);
+      await load();
+    }catch(reason){
+      notify("error","Status gagal diperbarui",reason instanceof Error?reason.message:"Status gagal diperbarui");
+    }finally{setBusy(false)}
+  }
+
+  return <>
+    <section className="page-heading">
+      <div>
+        <p className="eyebrow">People directory</p>
+        <h1>Direktori Karyawan</h1>
+        <p>Cari anggota tim, lihat struktur, dan kelola status kerja sesuai izin.</p>
+      </div>
+      {role==="hr_admin"&&<button className="primary-action auto-width" onClick={()=>setShowForm(true)}>+ Tambah karyawan</button>}
+    </section>
+    <div className="filter-bar">
+      <label className="search-field">
+        <span>Cari karyawan</span>
+        <input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Nama, email, atau jabatan"/>
+      </label>
+      <label>
+        <span>Departemen</span>
+        <select value={department} onChange={event=>setDepartment(event.target.value)}>
+          <option value="all">Semua departemen</option>
+          {departments.map(item=><option key={item}>{item}</option>)}
+        </select>
+      </label>
+      <div className="filter-summary"><b>{visible.length}</b><span>dari {items.length} karyawan</span></div>
+    </div>
+    <div className="card table-card">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Karyawan</th>
+              <th>Departemen</th>
+              <th>Jabatan</th>
+              <th>Lokasi kerja</th>
+              <th>Peran</th>
+              <th>Status</th>
+              <th>Gaji</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((employee,index)=>(
+              <tr key={employee.id} className="clickable-row" onClick={()=>router.push(`/app/people/${employee.id}`)}>
+                <td>
+                  <div className="employee-cell">
+                    <span className={`avatar avatar-${index%3}`}>{employee.name.split(" ").map(part=>part[0]).slice(0,2).join("")}</span>
+                    <span><Link href={`/app/people/${employee.id}`}><b>{employee.name}</b></Link><small>{employee.email}</small></span>
+                  </div>
+                </td>
+                <td>{employee.department}</td>
+                <td>{employee.title}</td>
+                <td><span className={`status ${employee.is_remote?"remote":"office"}`}>{employee.is_remote?"Remote":"Kantor"}</span></td>
+                <td>{employee.role==="hr_admin"?"HR Admin":employee.role==="manager"?"Manager":"Employee"}</td>
+                <td><span className={`status ${employee.status}`}>{employee.status==="active"?"Aktif":employee.status==="suspended"?"Ditangguhkan":"Berakhir"}</span></td>
+                <td>{employee.salary!=null?formatMoney(employee.salary):"Tidak berwenang"}</td>
+                <td>
+                  {role==="hr_admin"&&employee.id!=="e-hr"?(
+                    <button className="text-button" disabled={busy} onClick={event=>{event.stopPropagation();toggleStatus(employee)}}>
+                      {employee.status==="active"?"Tangguhkan":"Aktifkan"}
+                    </button>
+                  ):<span className="muted">Detail</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {visible.length===0&&<div className="feature-empty"><span>⌕</span><h2>Tidak ada hasil</h2><p>Ubah pencarian atau filter departemen.</p></div>}
+    </div>
+    {showForm&&(
+      <div className="dialog-backdrop">
+        <section className="decision-dialog employee-dialog" role="dialog" aria-modal="true" aria-labelledby="employee-title">
+          <p className="eyebrow">Employee master</p>
+          <h2 id="employee-title">Tambah karyawan</h2>
+          <div className="form-grid">
+            <label>Nama lengkap<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})}/></label>
+            <label>Email kerja<input type="email" value={form.email} onChange={event=>setForm({...form,email:event.target.value})}/></label>
+            <label>Departemen
+              <select value={form.department} onChange={event=>setForm({...form,department:event.target.value})}>
+                {["Management","Human Resources","Product","Engineering","Creative","Sales","Operations","Finance"].map(item=><option key={item}>{item}</option>)}
+              </select>
+            </label>
+            <label>Jabatan<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})}/></label>
+            <label>Peran
+              <select value={form.role} onChange={event=>setForm({...form,role:event.target.value})}>
+                <option value="employee">Employee</option>
+                <option value="manager">Manager</option>
+                <option value="hr_admin">HR Admin</option>
+              </select>
+            </label>
+            <label>Gaji bulanan<input type="number" min="0" value={form.salary} onChange={event=>setForm({...form,salary:event.target.value})}/></label>
+          </div>
+          <label className={`location-consent ${form.is_remote?"approved":""}`}>
+            <input type="checkbox" checked={form.is_remote} onChange={event=>setForm({...form,is_remote:event.target.checked})}/>
+            <span>
+              <b>Pekerja remote (bebas lokasi)</b>
+              <small>Check-in dan re-verifikasi tidak menolak berdasarkan radius kantor.</small>
+            </span>
+          </label>
+          <div className="dialog-actions">
+            <button className="secondary-button" onClick={()=>setShowForm(false)}>Batal</button>
+            <button className="secondary-button" disabled={busy} onClick={create}>{busy?"Menyimpan…":"Simpan langsung"}</button>
+            <button className="primary-action auto-width" disabled={busy} onClick={invite}>{busy?"Mengirim…":"Undang via email"}</button>
+          </div>
+        </section>
+      </div>
+    )}
+    <NotificationDialog notification={notification} onClose={()=>setNotification(null)}/>
+  </>;
 }
-function formatMoney(value:number){return new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(value)}
+
+function formatMoney(value:number){
+  return new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(value);
+}
