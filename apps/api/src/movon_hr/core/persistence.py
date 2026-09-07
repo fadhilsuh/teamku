@@ -20,10 +20,13 @@ from sqlalchemy import (
     Table,
     Text,
     delete,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.schema import CreateColumn
 
 from movon_hr.core.settings import settings
 from movon_hr.core.tenancy import DEMO_TENANT_ID, bind_tenant, clear_registry, put_store
@@ -243,10 +246,34 @@ def _get_engine() -> AsyncEngine:
     return _engine
 
 
+def _add_column(connection, table: Table, column: Column) -> None:
+    preparer = connection.dialect.identifier_preparer
+    column_spec = str(CreateColumn(column).compile(dialect=connection.dialect))
+    connection.execute(text(f"ALTER TABLE {preparer.format_table(table)} ADD COLUMN {column_spec}"))
+
+
+def _add_missing_columns(connection) -> None:
+    """Add model columns that create_all will not attach to existing tables."""
+    inspector = inspect(connection)
+    for table in metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            _add_column(connection, table, column)
+
+
+def _ensure_schema(connection) -> None:
+    metadata.create_all(connection)
+    _add_missing_columns(connection)
+
+
 async def init_db() -> None:
     engine = _get_engine()
     async with engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
+        await conn.run_sync(_ensure_schema)
 
 
 async def dispose() -> None:
