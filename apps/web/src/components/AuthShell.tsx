@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {ReactNode} from "react";
+import {BrandLogo} from "./BrandLogo";
 
 export function AuthShell({
   title,
@@ -13,7 +14,7 @@ export function AuthShell({
   return (
     <main className="login-page">
       <section className="login-art">
-        <div className="login-logo">Teamku</div>
+        <div className="login-logo"><BrandLogo variant="white"/></div>
         <div>
           <p className="eyebrow" style={{color: "#fff"}}>powered by movon digital house</p>
           <h1>Presence with purpose.</h1>

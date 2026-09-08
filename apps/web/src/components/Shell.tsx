@@ -6,6 +6,7 @@ import {useEffect, useMemo, useState} from "react";
 import {api} from "../lib/api";
 import {waitForAuthTransition} from "../lib/transition";
 import {AuthTransition} from "./AuthTransition";
+import {BrandLogo} from "./BrandLogo";
 import {Icon} from "./Icon";
 
 type Role = "employee" | "manager" | "hr_admin";
@@ -99,7 +100,7 @@ export function Shell({children}:{children:React.ReactNode}) {
   return <div className="app-frame">
     {menuOpen&&<button className="sidebar-backdrop" aria-label="Tutup navigasi" onClick={()=>setMenuOpen(false)}/>}
     <aside className={menuOpen?"sidebar open":"sidebar"}>
-      <Link className="sidebar-brand" href="/app/overview"><span>teamku</span><small>PEOPLE OS</small></Link>
+      <Link className="sidebar-brand" href="/app/overview"><BrandLogo variant="white"/><small>PEOPLE OS</small></Link>
       <div className="sidebar-section"><p>Workspace</p>{links(nav)}</div>
       {operations.length>0&&<div className="sidebar-section"><p>Operations</p>{links(operations)}</div>}
       <div className={intelligenceOpen?"sidebar-callout expanded":"sidebar-callout"}><span className="callout-icon"><Icon name="spark"/></span><b>Movon Intelligence</b><small>{intelligenceOpen?"Ringkasan operasional berasal dari data kehadiran, cuti, dan payroll di workspace ini.":"Insight tim, tanpa spreadsheet."}</small><button type="button" onClick={()=>setIntelligenceOpen(value=>!value)}>{intelligenceOpen?"Tutup penjelasan":"Pelajari fitur"}</button></div>

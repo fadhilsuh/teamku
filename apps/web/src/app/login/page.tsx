@@ -5,6 +5,7 @@ import {api} from "../../lib/api";
 import {waitForAuthTransition} from "../../lib/transition";
 import {AuthTransition} from "../../components/AuthTransition";
 import {AuthLink, AuthLinks} from "../../components/AuthShell";
+import {BrandLogo} from "../../components/BrandLogo";
 import {NotificationDialog,NotificationDialogState} from "../../components/NotificationDialog";
 
 const accounts=[{label:"HR Admin",email:"hr@movon.test"},{label:"Manager",email:"manager@movon.test"},{label:"Employee",email:"employee@movon.test"},{label:"Fresh check-in",email:"fresh@movon.test"}];
@@ -30,7 +31,7 @@ export default function Login(){
   return <>
     <main className="login-page">
       <section className="login-art">
-        <div className="login-logo">Teamku</div>
+        <div className="login-logo"><BrandLogo variant="white"/></div>
         <div><p className="eyebrow" style={{color:"#fff"}}>powered by movon digital house</p><h1>Presence with purpose.</h1><p>Kelola kehadiran, agenda harian, dan keputusan tim dalam satu ruang kerja yang tenang dan jelas.</p></div>
       </section>
       <section className="login-form-wrap">
