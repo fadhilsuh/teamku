@@ -11,6 +11,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
 ENV HOSTNAME=0.0.0.0
 USER node
 EXPOSE 3000
