@@ -35,7 +35,6 @@ export function Shell({children}:{children:React.ReactNode}) {
   const [bootstrapAttempt,setBootstrapAttempt]=useState(0);
   const [searchOpen,setSearchOpen]=useState(false);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
-  const [intelligenceOpen,setIntelligenceOpen]=useState(false);
   const [signingOut,setSigningOut]=useState(false);
   const [pendingReverify,setPendingReverify]=useState(false);
 
@@ -104,7 +103,6 @@ export function Shell({children}:{children:React.ReactNode}) {
       <Link className="sidebar-brand" href="/app/overview"><BrandLogo variant="white"/></Link>
       <div className="sidebar-section"><p>Workspace</p>{links(nav)}</div>
       {operations.length>0&&<div className="sidebar-section"><p>Operations</p>{links(operations)}</div>}
-      <div className={intelligenceOpen?"sidebar-callout expanded":"sidebar-callout"}><span className="callout-icon"><Icon name="spark"/></span><b>Movon Intelligence</b><small>{intelligenceOpen?"Ringkasan operasional berasal dari data kehadiran, cuti, dan payroll di workspace ini.":"Insight tim, tanpa spreadsheet."}</small><button type="button" onClick={()=>setIntelligenceOpen(value=>!value)}>{intelligenceOpen?"Tutup penjelasan":"Pelajari fitur"}</button></div>
       <div className="user-panel"><span className="avatar">{initials}</span><span><b>{user.name}</b><small>{roleLabel}</small></span><button className="logout-button" type="button" onClick={logout} aria-label="Keluar" title="Keluar"><Icon name="logout" size={17}/></button></div>
     </aside>
     <div className="app-workspace">

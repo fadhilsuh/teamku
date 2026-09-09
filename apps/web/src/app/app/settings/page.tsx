@@ -44,6 +44,11 @@ const empty:AttendanceSettings={
 };
 const emptyCalendar:CalendarSettings={provider:"google",connected:false,team_calendar_id:"",calendar_name:"",scope:"company",division:"",delivery_mode:"shared_and_email"};
 
+function ProviderMark({provider}:{provider:"google"|"microsoft"}){
+  if(provider==="google") return <svg className="provider-brand-mark google-brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.35 12.27c0-.71-.06-1.4-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.45h3.14c1.84-1.69 2.91-4.18 2.91-7.22Z"/><path fill="#34A853" d="M12 21.75c2.63 0 4.84-.87 6.45-2.36l-3.14-2.45c-.87.58-1.98.92-3.31.92-2.54 0-4.7-1.72-5.47-4.03H3.28v2.53A9.74 9.74 0 0 0 12 21.75Z"/><path fill="#FBBC05" d="M6.53 13.83A5.85 5.85 0 0 1 6.22 12c0-.64.11-1.26.31-1.83V7.64H3.28A9.75 9.75 0 0 0 2.25 12c0 1.57.38 3.05 1.03 4.36l3.25-2.53Z"/><path fill="#EA4335" d="M12 6.14c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.22 14.63 2.25 12 2.25a9.74 9.74 0 0 0-8.72 5.39l3.25 2.53C7.3 7.86 9.46 6.14 12 6.14Z"/></svg>;
+  return <svg className="provider-brand-mark microsoft-brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>;
+}
+
 export default function SettingsPage(){
   const router=useRouter();
   const [form,setForm]=useState<AttendanceSettings>(empty);
@@ -334,11 +339,11 @@ export default function SettingsPage(){
           <p className="settings-copy">Pilih provider kalender perusahaan. Cuti yang disetujui akan dikirim ke kalender karyawan dan kalender bersama tim.</p>
           <div className="calendar-provider-grid" role="radiogroup" aria-label="Pilih provider kalender">
             {[{id:"google",name:"Google Calendar",description:"Google Workspace",color:"google"},{id:"microsoft",name:"Microsoft 365",description:"Outlook & Teams",color:"microsoft"}].map(provider=><button type="button" key={provider.id} className={`provider-option ${calendar.provider===provider.id?"selected":""} ${provider.color}`} onClick={()=>setCalendar({...calendar,provider:provider.id,connected:false})} role="radio" aria-checked={calendar.provider===provider.id}>
-              <span className="provider-icon"><Icon name={provider.id as "google"|"microsoft"} size={25}/></span><span className="provider-copy"><b>{provider.name}</b><small>{provider.description}</small></span><span className="provider-check"><Icon name="check" size={14}/></span>
+              <span className="provider-icon"><ProviderMark provider={provider.id as "google"|"microsoft"}/></span><span className="provider-copy"><b>{provider.name}</b><small>{provider.description}</small></span><span className="provider-check"><Icon name="check" size={14}/></span>
             </button>)}
           </div>
           <div className={`calendar-connect-box ${calendarAccount?"connected":""}`}>
-            <div className="calendar-config-heading"><span className="calendar-config-icon"><Icon name={calendar.provider as "google"|"microsoft"} size={19}/></span><div><b>{calendarAccount?`Akun ${calendar.provider==="google"?"Google":"Microsoft 365"} terhubung`:"Hubungkan akun admin"}</b><small>{calendarAccount?"Kalender siap dipilih untuk sinkronisasi":"Teamku hanya membutuhkan izin kalender yang relevan."}</small></div></div>
+            <div className="calendar-config-heading"><span className="calendar-config-icon"><ProviderMark provider={calendar.provider as "google"|"microsoft"}/></span><div><b>{calendarAccount?`Akun ${calendar.provider==="google"?"Google":"Microsoft 365"} terhubung`:"Hubungkan akun admin"}</b><small>{calendarAccount?"Kalender siap dipilih untuk sinkronisasi":"Teamku hanya membutuhkan izin kalender yang relevan."}</small></div></div>
             <button type="button" className={calendarAccount?"secondary-button":"connect-button"} disabled={calendarBusy} onClick={calendar.provider==="google"?connectGoogle:()=>notify("info","Microsoft 365 segera hadir","Koneksi Microsoft 365 akan menggunakan flow OAuth yang sama setelah kredensial aplikasi dikonfigurasi.")}><Icon name={calendarAccount?"check":"chevron"} size={15}/>{calendarAccount?"Ganti akun":"Hubungkan akun"}</button>
           </div>
           {calendarAccount&&<>
