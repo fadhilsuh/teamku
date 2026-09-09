@@ -15,7 +15,7 @@ type Tenant = {id:string;name:string;slug:string};
 type Office = {name:string};
 type Notification = {id:string;title:string;detail:string;target:string;read:boolean};
 type TodayAttendance = {pending_reverification:null|{id:string;due_at:string}};
-type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"|"pin"];
+type NavItem = readonly [string,string,"grid"|"clock"|"calendar"|"users"|"check"|"wallet"|"calculator"|"receipt"|"settings"|"shield"];
 
 const workspace: NavItem[] = [
   ["Beranda","/app/overview","grid"],
@@ -65,9 +65,9 @@ export function Shell({children}:{children:React.ReactNode}) {
     return items;
   },[user]);
   const operations=useMemo<NavItem[]>(()=>{
-    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"],["Pengaturan","/app/settings","pin"],["Kebijakan","/app/settings/policies","pin"]];
-    if(user?.role==="manager")return [["Persetujuan","/app/approvals","check"],["Slip Gaji","/app/payroll/payslips","wallet"]];
-    return [["Slip Gaji","/app/payroll/payslips","wallet"]];
+    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","calculator"],["Slip Gaji","/app/payroll/payslips","receipt"],["Pengaturan","/app/settings","settings"],["Kebijakan","/app/settings/policies","shield"]];
+    if(user?.role==="manager")return [["Persetujuan","/app/approvals","check"],["Slip Gaji","/app/payroll/payslips","receipt"]];
+    return [["Slip Gaji","/app/payroll/payslips","receipt"]];
   },[user]);
   const initials=user?.name.split(" ").map(part=>part[0]).slice(0,2).join("")||"--";
   const roleLabel=user?.role==="hr_admin"?"HR Admin":user?.role==="manager"?"Manager":"Employee";
