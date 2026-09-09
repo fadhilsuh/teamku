@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -10,7 +11,7 @@ from math import asin, cos, radians, sin, sqrt
 from random import uniform
 from secrets import token_urlsafe
 from urllib.error import URLError
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 from uuid import uuid4
@@ -43,6 +44,7 @@ from movon_hr.core.tenancy import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("movon_hr.calendar")
 JAKARTA = ZoneInfo("Asia/Jakarta")
 
 # Sessions expire after this idle-agnostic absolute lifetime.
@@ -128,6 +130,9 @@ class LeaveRequest:
     status: str = "pending"
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     approver_comment: str | None = None
+    calendar_sync_status: str = "not_applicable"
+    employee_calendar_event_id: str | None = None
+    team_calendar_event_id: str | None = None
 
 
 @dataclass
@@ -230,6 +235,20 @@ class OfficeLocation:
 
 
 @dataclass
+class CalendarSettings:
+    provider: str = ""
+    connected: bool = False
+    team_calendar_id: str = ""
+    calendar_name: str = ""
+    scope: str = "company"
+    division: str = ""
+    delivery_mode: str = "shared_and_email"
+    refresh_token: str | None = None
+    access_token: str | None = None
+    token_expires_at: datetime | None = None
+
+
+@dataclass
 class DemoStore:
     tenant_id: str = DEMO_TENANT_ID
     tenant_name: str = DEMO_TENANT_NAME
@@ -244,6 +263,7 @@ class DemoStore:
     idempotency: dict[str, str] = field(default_factory=dict)
     audit: list[dict] = field(default_factory=list)
     office: OfficeLocation = field(default_factory=OfficeLocation)
+    calendar: CalendarSettings = field(default_factory=CalendarSettings)
     invitations: dict[str, Invitation] = field(default_factory=dict)
     password_resets: dict[str, PasswordReset] = field(default_factory=dict)
     location_events: dict[str, LocationEvent] = field(default_factory=dict)
@@ -254,6 +274,7 @@ class DemoStore:
 # In-memory login throttle: email -> list of recent failed-attempt timestamps.
 # Not persisted; a best-effort brute-force guard within a single process.
 _login_attempts: dict[str, list[datetime]] = {}
+_google_oauth_states: dict[str, tuple[str, str]] = {}
 
 # Every demo account signs in with this password. Hashed once at import time so
 # seeding stays fast even though tests reset the store frequently.
@@ -584,6 +605,111 @@ def notify(user_id: str, title: str, detail: str, target: str) -> None:
     store.notifications[item.id] = item
 
 
+def leave_recipients(request: LeaveRequest) -> list[Employee]:
+    employee = store.employees[request.employee_id]
+    recipients = [person for person in store.employees.values() if person.role == "manager" and person.department == employee.department]
+    recipients.extend(person for person in store.employees.values() if person.role == "hr_admin" and person.status == "active")
+    unique: dict[str, Employee] = {person.id: person for person in recipients}
+    return list(unique.values())
+
+
+def email_leave(recipients: list[Employee], subject: str, body: str) -> None:
+    for recipient in recipients:
+        if recipient.email:
+            send_email(recipient.email, subject, body)
+
+
+def sync_leave_calendar(request: LeaveRequest, employee: Employee) -> None:
+    if store.calendar.provider != "google" or not store.calendar.connected or not store.calendar.team_calendar_id:
+        request.calendar_sync_status = "skipped"
+        return
+    try:
+        end_exclusive = request.end + timedelta(days=1)
+        event = google_calendar_request(
+            "POST",
+            f"https://www.googleapis.com/calendar/v3/calendars/{quote(store.calendar.team_calendar_id, safe='')}/events?sendUpdates=all",
+            {
+                "summary": f"Cuti · {employee.name}",
+                "description": f"Permohonan cuti Teamku {request.id}.",
+                "start": {"date": request.start.isoformat()},
+                "end": {"date": end_exclusive.isoformat()},
+                "attendees": [{"email": employee.email}],
+                "transparency": "opaque",
+            },
+        )
+        request.team_calendar_event_id = event.get("id")
+        request.employee_calendar_event_id = None
+        request.calendar_sync_status = "ok" if request.team_calendar_event_id else "failed"
+    except Exception:
+        logger.exception("Google Calendar event creation failed request_id=%s", request.id)
+        request.calendar_sync_status = "failed"
+
+
+def remove_leave_calendar(request: LeaveRequest) -> None:
+    if request.team_calendar_event_id and store.calendar.provider == "google" and store.calendar.connected:
+        try:
+            google_calendar_request(
+                "DELETE",
+                f"https://www.googleapis.com/calendar/v3/calendars/{quote(store.calendar.team_calendar_id, safe='')}/events/{quote(request.team_calendar_event_id, safe='')}",
+            )
+            request.calendar_sync_status = "removed"
+        except Exception:
+            logger.exception("Google Calendar event deletion failed request_id=%s", request.id)
+            request.calendar_sync_status = "failed"
+        return
+    request.calendar_sync_status = "removed"
+
+
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
+
+
+def google_redirect_uri() -> str:
+    return settings.google_redirect_uri or f"{settings.app_base_url.rstrip('/')}/api/v1/settings/calendar/google/callback"
+
+
+def google_token_request(values: dict[str, str]) -> dict:
+    request = UrlRequest(
+        "https://oauth2.googleapis.com/token",
+        data=urlencode(values).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlopen(request, timeout=15) as response:
+        import json
+        return json.loads(response.read())
+
+
+def google_access_token() -> str:
+    calendar = store.calendar
+    if calendar.access_token and calendar.token_expires_at and datetime.now(UTC) < calendar.token_expires_at - timedelta(minutes=1):
+        return calendar.access_token
+    if not calendar.refresh_token or not settings.google_client_id or not settings.google_client_secret:
+        raise ValueError("Google Calendar is not connected")
+    tokens = google_token_request({
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
+        "refresh_token": calendar.refresh_token,
+        "grant_type": "refresh_token",
+    })
+    calendar.access_token = tokens["access_token"]
+    calendar.token_expires_at = datetime.now(UTC) + timedelta(seconds=int(tokens.get("expires_in", 3600)))
+    return calendar.access_token
+
+
+def google_calendar_request(method: str, url: str, body: dict | None = None) -> dict:
+    import json
+    access_token = google_access_token()
+    request = UrlRequest(
+        url,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(request, timeout=15) as response:
+        payload = response.read()
+        return json.loads(payload) if payload else {}
+
+
 DEFAULT_OFFICE_LATITUDE = -6.2
 DEFAULT_OFFICE_LONGITUDE = 106.8166
 DEFAULT_OFFICE_RADIUS_METERS = 300
@@ -626,6 +752,18 @@ def office_payload(office: OfficeLocation | None = None) -> dict:
         "clock_out_reminder_time": item.clock_out_reminder_time,
         "max_open_hours": item.max_open_hours,
         "alert_managers": item.alert_managers,
+    }
+
+
+def calendar_payload() -> dict:
+    return {
+        "provider": store.calendar.provider,
+        "connected": store.calendar.connected,
+        "team_calendar_id": store.calendar.team_calendar_id,
+        "calendar_name": store.calendar.calendar_name,
+        "scope": store.calendar.scope,
+        "division": store.calendar.division,
+        "delivery_mode": store.calendar.delivery_mode,
     }
 
 
@@ -1066,6 +1204,16 @@ class OfficeSettingsInput(BaseModel):
     clock_out_reminder_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     max_open_hours: int | None = Field(default=None, ge=1, le=24)
     alert_managers: bool | None = None
+
+
+class CalendarSettingsInput(BaseModel):
+    provider: str = Field(pattern="^(google|microsoft)$")
+    team_calendar_id: str = Field(min_length=2, max_length=300)
+    connected: bool = False
+    calendar_name: str = Field(default="Kalender perusahaan", max_length=120)
+    scope: str = Field(default="company", pattern="^(company|division)$")
+    division: str = Field(default="", max_length=100)
+    delivery_mode: str = Field(default="shared_and_email", pattern="^(shared|shared_and_email)$")
 
 
 class MapsUrlInput(BaseModel):
@@ -1539,6 +1687,98 @@ async def update_office_settings(
     return office_payload()
 
 
+@router.get("/settings/calendar")
+async def get_calendar_settings(x_demo_user: str | None = Header(default=None)) -> dict:
+    actor(x_demo_user)
+    return calendar_payload()
+
+
+@router.put("/settings/calendar")
+async def update_calendar_settings(
+    payload: CalendarSettingsInput, x_demo_user: str | None = Header(default=None)
+) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    current = store.calendar
+    store.calendar = CalendarSettings(
+        provider=payload.provider,
+        connected=payload.connected,
+        team_calendar_id=payload.team_calendar_id.strip(),
+        calendar_name=payload.calendar_name.strip() or "Kalender perusahaan",
+        scope=payload.scope,
+        division=payload.division.strip(),
+        delivery_mode=payload.delivery_mode,
+        refresh_token=current.refresh_token,
+        access_token=current.access_token,
+        token_expires_at=current.token_expires_at,
+    )
+    audit("settings.calendar_updated", user, store.calendar.team_calendar_id)
+    return calendar_payload()
+
+
+@router.get("/settings/calendar/google/start")
+async def start_google_calendar(x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    if not settings.google_client_id:
+        raise HTTPException(503, "Google Calendar belum dikonfigurasi oleh administrator sistem")
+    state = token_urlsafe(32)
+    _google_oauth_states[state] = (store.tenant_id, user.id)
+    query = urlencode({
+        "client_id": settings.google_client_id,
+        "redirect_uri": google_redirect_uri(),
+        "response_type": "code",
+        "scope": GOOGLE_CALENDAR_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+    return {"authorization_url": f"https://accounts.google.com/o/oauth2/v2/auth?{query}"}
+
+
+@router.get("/settings/calendar/google/callback")
+async def google_calendar_callback(code: str | None = None, state: str | None = None, error: str | None = None) -> Response:
+    if error or not code or not state:
+        return Response("Google Calendar connection was cancelled.", status_code=400)
+    context = _google_oauth_states.pop(state, None)
+    if not context or not settings.google_client_id or not settings.google_client_secret:
+        return Response("Google Calendar connection expired or is not configured.", status_code=400)
+    tenant_id, _ = context
+    try:
+        tokens = google_token_request({
+            "code": code,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "redirect_uri": google_redirect_uri(),
+            "grant_type": "authorization_code",
+        })
+    except Exception:
+        return Response("Google Calendar token exchange failed.", status_code=502)
+    if not tokens.get("access_token"):
+        return Response("Google Calendar did not return an access token.", status_code=502)
+    tenant_store = get_store(tenant_id)
+    tenant_store.calendar.provider = "google"
+    tenant_store.calendar.connected = True
+    tenant_store.calendar.access_token = tokens["access_token"]
+    tenant_store.calendar.refresh_token = tokens.get("refresh_token") or tenant_store.calendar.refresh_token
+    tenant_store.calendar.token_expires_at = datetime.now(UTC) + timedelta(seconds=int(tokens.get("expires_in", 3600)))
+    return Response(status_code=302, headers={"Location": f"{settings.app_base_url.rstrip('/')}/app/settings?calendar=connected"})
+
+
+@router.get("/settings/calendar/google/calendars")
+async def google_calendars(x_demo_user: str | None = Header(default=None)) -> dict:
+    actor_user = actor(x_demo_user)
+    require(actor_user, "hr_admin")
+    calendar = store.calendar
+    if not calendar.access_token:
+        raise HTTPException(409, "Hubungkan akun Google terlebih dahulu")
+    try:
+        data = google_calendar_request("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer")
+    except Exception as error:
+        raise HTTPException(502, "Daftar kalender Google tidak dapat diambil") from error
+    return {"items": [{"id": item["id"], "name": item.get("summary") or item["id"], "primary": item.get("primary", False)} for item in data.get("items", [])]}
+
+
 @router.post("/settings/office/from-maps-url")
 async def office_from_maps_url(
     payload: MapsUrlInput, x_demo_user: str | None = Header(default=None)
@@ -1889,6 +2129,11 @@ async def submit_leave(
                 f"{user.name} menunggu persetujuan Anda.",
                 "/app/approvals",
             )
+    email_leave(
+        leave_recipients(request),
+        "Permohonan cuti baru — Teamku",
+        f"{user.name} mengajukan cuti {request.start} sampai {request.end} ({working_days(request.start, request.end)} hari kerja).\n\nBuka Teamku: /app/approvals",
+    )
     return asdict(request) | {"days": working_days(request.start, request.end)}
 
 
@@ -1903,7 +2148,13 @@ async def cancel_leave(
     if request.status not in {"pending", "approved"}:
         raise HTTPException(409, "Permohonan ini tidak dapat dibatalkan")
     request.status = "cancelled"
+    if request.status == "cancelled" and request.calendar_sync_status in {"ok", "failed"}:
+        remove_leave_calendar(request)
     audit("leave.cancelled", user, request.id)
+    cancel_recipients = leave_recipients(request)
+    if request.employee_id not in {person.id for person in cancel_recipients}:
+        cancel_recipients.append(user)
+    email_leave(cancel_recipients, "Permohonan cuti dibatalkan — Teamku", f"{user.name} membatalkan permohonan cuti {request.start} sampai {request.end}.\n\nBuka Teamku: /app/time/time-off")
     return asdict(request)
 
 
@@ -1959,6 +2210,13 @@ async def decide(
         f"Permohonan Anda {payload.decision}.",
         "/app/time/time-off",
     )
+    email_leave(
+        [employee],
+        f"Permohonan cuti {payload.decision} — Teamku",
+        f"Permohonan cuti Anda ({request.start} sampai {request.end}) telah {payload.decision}.\nCatatan: {payload.comment}\n\nBuka Teamku: /app/time/time-off",
+    )
+    if payload.decision == "approved":
+        sync_leave_calendar(request, employee)
     return asdict(request)
 
 

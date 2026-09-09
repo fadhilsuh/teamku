@@ -37,6 +37,7 @@ from movon_hr.modules.api import (
     Employee,
     Invitation,
     LeaveRequest,
+    CalendarSettings,
     LocationEvent,
     Notification,
     OfficeLocation,
@@ -104,6 +105,24 @@ leave_requests_table = Table(
     Column("status", String, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("approver_comment", Text, nullable=True),
+    Column("calendar_sync_status", String, nullable=False, server_default="not_applicable"),
+    Column("employee_calendar_event_id", String, nullable=True),
+    Column("team_calendar_event_id", String, nullable=True),
+)
+
+calendar_settings_table = Table(
+    "calendar_settings", metadata,
+    Column("tenant_id", String, primary_key=True),
+    Column("provider", String, nullable=False, server_default=""),
+    Column("connected", Boolean, nullable=False, server_default="false"),
+    Column("team_calendar_id", String, nullable=False, server_default=""),
+    Column("calendar_name", String, nullable=False, server_default=""),
+    Column("scope", String, nullable=False, server_default="company"),
+    Column("division", String, nullable=False, server_default=""),
+    Column("delivery_mode", String, nullable=False, server_default="shared_and_email"),
+    Column("refresh_token", Text, nullable=True),
+    Column("access_token", Text, nullable=True),
+    Column("token_expires_at", DateTime(timezone=True), nullable=True),
 )
 
 payroll_runs_table = Table(
@@ -380,6 +399,9 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     status=row["status"],
                     created_at=row["created_at"],
                     approver_comment=row["approver_comment"],
+                    calendar_sync_status=row.get("calendar_sync_status") or "not_applicable",
+                    employee_calendar_event_id=row.get("employee_calendar_event_id"),
+                    team_calendar_event_id=row.get("team_calendar_event_id"),
                 )
                 for row in (
                     await conn.execute(
@@ -476,6 +498,9 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     max_open_hours=int(office_row.get("max_open_hours") or 10),
                     alert_managers=bool(office_row.get("alert_managers") or False),
                 )
+            calendar_row = (await conn.execute(select(calendar_settings_table).where(calendar_settings_table.c.tenant_id == tid))).mappings().first()
+            if calendar_row:
+                item.calendar = CalendarSettings(**{key: calendar_row.get(key) for key in CalendarSettings.__dataclass_fields__})
             item.invitations = {
                 row["token"]: Invitation(
                     token=row["token"],
@@ -579,6 +604,7 @@ async def save_store(store: DemoStore) -> None:
         await conn.execute(delete(employees_table).where(employees_table.c.tenant_id == tid))
         await conn.execute(delete(attendance_table).where(attendance_table.c.tenant_id == tid))
         await conn.execute(delete(leave_requests_table).where(leave_requests_table.c.tenant_id == tid))
+        await conn.execute(delete(calendar_settings_table).where(calendar_settings_table.c.tenant_id == tid))
         await conn.execute(delete(payroll_runs_table).where(payroll_runs_table.c.tenant_id == tid))
         await conn.execute(delete(notifications_table).where(notifications_table.c.tenant_id == tid))
         await conn.execute(delete(sessions_table).where(sessions_table.c.tenant_id == tid))
@@ -655,6 +681,7 @@ async def save_store(store: DemoStore) -> None:
             office_table.insert(),
             [{"tenant_id": tid, **asdict(store.office)}],
         )
+        await conn.execute(calendar_settings_table.insert(), [{"tenant_id": tid, **asdict(store.calendar)}])
         if store.invitations:
             await conn.execute(
                 invitations_table.insert(),

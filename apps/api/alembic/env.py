@@ -1,8 +1,8 @@
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from movon_hr.core.persistence import metadata
 from movon_hr.core.settings import postgres_sync_url, settings
 

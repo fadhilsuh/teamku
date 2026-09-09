@@ -1,10 +1,12 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="MOVON_")
     environment: str = "development"
+    # Backwards-compatible with the original .env.example key MOVON_ENV.
+    env: str | None = None
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
     )
@@ -15,6 +17,15 @@ class Settings(BaseSettings):
     app_base_url: str = "http://localhost:3000"
     session_cookie_name: str = "teamku_session"
     session_cookie_secure: bool = False
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_environment(self):
+        if self.env and self.environment == "development":
+            self.environment = self.env
+        return self
 
 
 settings = Settings()
@@ -31,4 +42,3 @@ def postgres_sync_url(url: str) -> str:
     if url.startswith("postgresql://"):
         return "postgresql+psycopg://" + url.removeprefix("postgresql://")
     return url
-

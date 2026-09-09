@@ -24,6 +24,8 @@ type AttendanceSettings={
 };
 type User={role:string};
 type MapsParseResult={latitude:number;longitude:number;resolved_url:string;maps_url:string};
+type CalendarSettings={provider:string;connected:boolean;team_calendar_id:string;calendar_name:string;scope:"company"|"division";division:string;delivery_mode:"shared"|"shared_and_email"};
+type GoogleCalendar={id:string;name:string;primary:boolean};
 
 const empty:AttendanceSettings={
   name:"Jakarta HQ",
@@ -40,6 +42,7 @@ const empty:AttendanceSettings={
   max_open_hours:10,
   alert_managers:false,
 };
+const emptyCalendar:CalendarSettings={provider:"google",connected:false,team_calendar_id:"",calendar_name:"",scope:"company",division:"",delivery_mode:"shared_and_email"};
 
 export default function SettingsPage(){
   const router=useRouter();
@@ -48,6 +51,10 @@ export default function SettingsPage(){
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
   const [notification,setNotification]=useState<NotificationDialogState|null>(null);
+  const [calendar,setCalendar]=useState<CalendarSettings>(emptyCalendar);
+  const [calendarBusy,setCalendarBusy]=useState(false);
+  const [calendarAccount,setCalendarAccount]=useState(false);
+  const [calendars,setCalendars]=useState<GoogleCalendar[]>([]);
   const token=()=>localStorage.getItem("movon_user")||undefined;
   const notify=(type:NotificationDialogState["type"],title:string,message:string)=>setNotification({type,title,message});
   const mapsUrl=googleMapsOpenUrl(form.latitude,form.longitude);
@@ -58,16 +65,45 @@ export default function SettingsPage(){
     Promise.all([
       api<{user:User}>("/me",{},auth),
       api<AttendanceSettings>("/settings/office",{},auth),
-    ]).then(([profile,office])=>{
+      api<CalendarSettings>("/settings/calendar",{},auth),
+    ]).then(([profile,office,calendarSettings])=>{
       if(profile.user.role!=="hr_admin"){router.replace("/app/overview");return}
       setForm({...empty,...office});
       setMapsLink(googleMapsOpenUrl(office.latitude,office.longitude));
+      setCalendar({...emptyCalendar,...calendarSettings});
+      setCalendarAccount(calendarSettings.connected);
+      if(calendarSettings.connected) loadGoogleCalendars();
       setLoading(false);
     }).catch(reason=>{
       notify("error","Pengaturan gagal dimuat",reason instanceof Error?reason.message:"Pengaturan gagal dimuat.");
       setLoading(false);
     });
   },[router]);
+
+  async function connectGoogle(){
+    setCalendarBusy(true);
+    try{
+      const result=await api<{authorization_url:string}>("/settings/calendar/google/start",{},token());
+      window.location.assign(result.authorization_url);
+    }catch(reason){notify("error","Google Calendar belum siap",reason instanceof Error?reason.message:"Google Calendar belum siap.");setCalendarBusy(false)}
+  }
+
+  async function loadGoogleCalendars(){
+    try{const result=await api<{items:GoogleCalendar[]}>("/settings/calendar/google/calendars",{},token());setCalendars(result.items)}catch(reason){notify("error","Daftar kalender gagal dimuat",reason instanceof Error?reason.message:"Daftar kalender gagal dimuat.")}
+  }
+
+  async function saveCalendar(){
+    if(!calendarAccount){notify("error","Akun belum terhubung","Hubungkan akun Google atau Microsoft 365 terlebih dahulu.");return}
+    if(!calendar.team_calendar_id.trim()){notify("error","Kalender belum dipilih","Muat daftar kalender Google lalu pilih kalender tujuan.");return}
+    if(calendar.scope==="division"&&!calendar.division.trim()){notify("error","Divisi belum dipilih","Pilih divisi yang ingin disinkronkan.");return}
+    setCalendarBusy(true);
+    try{
+      const saved=await api<CalendarSettings>("/settings/calendar",{method:"PUT",body:JSON.stringify({...calendar,team_calendar_id:calendar.team_calendar_id.trim(),calendar_name:calendar.calendar_name||"Kalender perusahaan",connected:true})},token());
+      setCalendar(saved);
+      notify("success","Kalender terhubung","Pengaturan kalender tersimpan. Cuti yang disetujui akan ditandai untuk kalender karyawan dan kalender bersama.");
+    }catch(reason){notify("error","Kalender gagal disimpan",reason instanceof Error?reason.message:"Kalender gagal disimpan.")}
+    finally{setCalendarBusy(false)}
+  }
 
   async function save(successTitle:string,successMessage:string){
     if(form.name.trim().length<2){notify("error","Nama lokasi belum lengkap","Nama lokasi kantor wajib diisi.");return}
@@ -291,6 +327,27 @@ export default function SettingsPage(){
           <div className="settings-actions">
             <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Pengingat kehadiran diperbarui","Pengaturan notifikasi dan alert kehadiran tersimpan.")}>{busy?"Menyimpan…":"Simpan pengingat kehadiran"}</button>
           </div>
+        </article>
+
+        <article className="panel settings-panel calendar-settings-card">
+          <div className="panel-head"><div><p className="eyebrow">Calendar integration</p><h2>Hubungkan kalender kerja</h2></div><span className={`status ${calendar.connected?"approved":"pending"}`}>{calendar.connected?"Terhubung":"Belum terhubung"}</span></div>
+          <p className="settings-copy">Pilih provider kalender perusahaan. Cuti yang disetujui akan dikirim ke kalender karyawan dan kalender bersama tim.</p>
+          <div className="calendar-provider-grid" role="radiogroup" aria-label="Pilih provider kalender">
+            {[{id:"google",name:"Google Calendar",description:"Google Workspace",color:"google"},{id:"microsoft",name:"Microsoft 365",description:"Outlook & Teams",color:"microsoft"}].map(provider=><button type="button" key={provider.id} className={`provider-option ${calendar.provider===provider.id?"selected":""} ${provider.color}`} onClick={()=>setCalendar({...calendar,provider:provider.id,connected:false})} role="radio" aria-checked={calendar.provider===provider.id}>
+              <span className="provider-icon"><Icon name={provider.id as "google"|"microsoft"} size={25}/></span><span className="provider-copy"><b>{provider.name}</b><small>{provider.description}</small></span><span className="provider-check"><Icon name="check" size={14}/></span>
+            </button>)}
+          </div>
+          <div className={`calendar-connect-box ${calendarAccount?"connected":""}`}>
+            <div className="calendar-config-heading"><span className="calendar-config-icon"><Icon name={calendar.provider as "google"|"microsoft"} size={19}/></span><div><b>{calendarAccount?`Akun ${calendar.provider==="google"?"Google":"Microsoft 365"} terhubung`:"Hubungkan akun admin"}</b><small>{calendarAccount?"Kalender siap dipilih untuk sinkronisasi":"Teamku hanya membutuhkan izin kalender yang relevan."}</small></div></div>
+            <button type="button" className={calendarAccount?"secondary-button":"connect-button"} disabled={calendarBusy} onClick={calendar.provider==="google"?connectGoogle:()=>notify("info","Microsoft 365 segera hadir","Koneksi Microsoft 365 akan menggunakan flow OAuth yang sama setelah kredensial aplikasi dikonfigurasi.")}><Icon name={calendarAccount?"check":"chevron"} size={15}/>{calendarAccount?"Ganti akun":"Hubungkan akun"}</button>
+          </div>
+          {calendarAccount&&<>
+            <div className="calendar-config-box"><div className="calendar-config-heading"><span className="calendar-config-icon"><Icon name="calendar" size={19}/></span><div><b>Kalender tujuan</b><small>Pilih kalender yang menerima event cuti.</small></div></div>{calendar.provider==="google"&&!calendars.length?<button type="button" className="secondary-button" onClick={loadGoogleCalendars}>Muat daftar kalender Google</button>:calendars.length?<div className="calendar-list">{calendars.map(item=><button type="button" key={item.id} className={`calendar-choice ${calendar.team_calendar_id===item.id?"selected":""}`} onClick={()=>setCalendar({...calendar,team_calendar_id:item.id,calendar_name:item.name,connected:false})}><span className="calendar-dot"/><span><b>{item.name}</b><small>{item.primary?"Kalender utama":"Kalender bersama"}</small></span>{calendar.team_calendar_id===item.id&&<Icon name="check" size={16}/>}</button>)}</div>:<button type="button" className="calendar-choice selected"><span className="calendar-dot"/><span><b>{calendar.calendar_name||"Kalender perusahaan"}</b><small>{calendar.provider==="google"?"Google Calendar":"Microsoft 365 Calendar"}</small></span><Icon name="check" size={16}/></button>}</div>
+            <div className="scope-box"><b>Siapa yang disinkronkan?</b><div className="scope-grid"><label className={calendar.scope==="company"?"active":""}><input type="radio" checked={calendar.scope==="company"} onChange={()=>setCalendar({...calendar,scope:"company"})}/>Seluruh perusahaan<small>Semua divisi</small></label><label className={calendar.scope==="division"?"active":""}><input type="radio" checked={calendar.scope==="division"} onChange={()=>setCalendar({...calendar,scope:"division"})}/>Satu divisi<small>Hanya tim tertentu</small></label></div>{calendar.scope==="division"&&<input value={calendar.division} onChange={event=>setCalendar({...calendar,division:event.target.value})} placeholder="Contoh: Engineering"/>}</div>
+            <div className="delivery-box"><b>Bagaimana event dibagikan?</b><label><input type="radio" checked={calendar.delivery_mode==="shared_and_email"} onChange={()=>setCalendar({...calendar,delivery_mode:"shared_and_email"})}/>Kalender bersama + email invitation <small>Rekomendasi untuk semua karyawan</small></label><label><input type="radio" checked={calendar.delivery_mode==="shared"} onChange={()=>setCalendar({...calendar,delivery_mode:"shared"})}/>Kalender bersama saja</label></div>
+          </>}
+          <div className="calendar-privacy"><Icon name="check" size={16}/><span><b>Informasi sensitif tetap aman</b><small>Event hanya menampilkan “Cuti · Nama” dan tanggal. Alasan cuti tidak dibagikan ke kalender.</small></span></div>
+          <div className="settings-actions calendar-actions"><button type="button" className="primary-action auto-width" disabled={calendarBusy} onClick={saveCalendar}>{calendarBusy?"Menyimpan…":calendar.connected?"Perbarui koneksi":"Hubungkan kalender"}</button><span className="calendar-help">Admin HR mengatur koneksi untuk seluruh workspace.</span></div>
         </article>
       </div>
     )}
