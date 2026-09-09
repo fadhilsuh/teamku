@@ -61,11 +61,12 @@ export function Shell({children}:{children:React.ReactNode}) {
   const nav=useMemo(()=>{
     if(!user)return workspace;
     const items=[...workspace];
+    items.push(["Ask Teamku","/app/ask-teamku","check"]);
     if(user.role!=="employee")items.push(["Karyawan","/app/people","users"]);
     return items;
   },[user]);
   const operations=useMemo<NavItem[]>(()=>{
-    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"],["Pengaturan","/app/settings","pin"]];
+    if(user?.role==="hr_admin")return [["Persetujuan","/app/approvals","check"],["Payroll","/app/payroll/runs","wallet"],["Slip Gaji","/app/payroll/payslips","wallet"],["Pengaturan","/app/settings","pin"],["Kebijakan","/app/settings/policies","pin"]];
     if(user?.role==="manager")return [["Persetujuan","/app/approvals","check"],["Slip Gaji","/app/payroll/payslips","wallet"]];
     return [["Slip Gaji","/app/payroll/payslips","wallet"]];
   },[user]);

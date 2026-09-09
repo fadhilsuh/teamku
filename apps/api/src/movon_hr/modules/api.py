@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from movon_hr.core.mailer import reset_outbox, send_email
+from movon_hr.core.policy_assistant import answer_question
 from movon_hr.core.security import (
     generate_temporary_password,
     hash_password,
@@ -176,6 +177,42 @@ class AlertReceipt:
 
 
 @dataclass
+class PolicySection:
+    id: str
+    heading: str
+    body: str
+    position: int
+
+
+@dataclass
+class PolicyDocument:
+    id: str
+    title: str
+    category: str
+    language: str
+    effective_date: date
+    expiry_date: date | None
+    state: str = "draft"
+    sections: list[PolicySection] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_by: str = ""
+    updated_by: str = ""
+
+
+@dataclass
+class PolicyAnswerAudit:
+    id: str
+    actor_id: str
+    question: str
+    cited_sections: list[dict]
+    provider: str
+    outcome: str
+    suggested_action: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
 class OfficeLocation:
     name: str = "Jakarta HQ"
     latitude: float = -6.2
@@ -211,6 +248,8 @@ class DemoStore:
     password_resets: dict[str, PasswordReset] = field(default_factory=dict)
     location_events: dict[str, LocationEvent] = field(default_factory=dict)
     alert_receipts: dict[str, AlertReceipt] = field(default_factory=dict)
+    policies: dict[str, PolicyDocument] = field(default_factory=dict)
+    policy_answer_audit: dict[str, PolicyAnswerAudit] = field(default_factory=dict)
 
 # In-memory login throttle: email -> list of recent failed-attempt timestamps.
 # Not persisted; a best-effort brute-force guard within a single process.
@@ -331,6 +370,8 @@ def reset_demo_store() -> None:
     store.invitations = {}
     store.password_resets = {}
     store.alert_receipts = {}
+    store.policies = {}
+    store.policy_answer_audit = {}
     _login_attempts.clear()
 
 
@@ -924,6 +965,30 @@ def payroll_payload(run: PayrollRun) -> dict:
     }
 
 
+def leave_balance(employee_id: str) -> dict:
+    approved_days = sum(
+        working_days(item.start, item.end)
+        for item in store.requests.values()
+        if item.employee_id == employee_id and item.status == "approved"
+    )
+    return {"annual_days": 12, "used_days": approved_days, "remaining_days": max(12 - approved_days, 0)}
+
+
+def policy_payload(policy: PolicyDocument) -> dict:
+    return {
+        "id": policy.id, "title": policy.title, "category": policy.category, "language": policy.language,
+        "effective_date": policy.effective_date, "expiry_date": policy.expiry_date, "state": policy.state,
+        "sections": [asdict(item) for item in sorted(policy.sections, key=lambda item: item.position)],
+        "created_at": policy.created_at, "updated_at": policy.updated_at,
+        "created_by": policy.created_by, "updated_by": policy.updated_by,
+    }
+
+
+def validate_policy(title: str, sections: list[PolicySection]) -> None:
+    if not title.strip() or not any(item.heading.strip() and item.body.strip() for item in sections):
+        raise HTTPException(422, "Kebijakan memerlukan judul dan setidaknya satu bagian yang terisi")
+
+
 class Login(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=128)
@@ -1037,6 +1102,25 @@ class EmployeeInput(BaseModel):
 class EmployeeUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(active|suspended|terminated)$")
     is_remote: bool | None = None
+
+
+class PolicySectionInput(BaseModel):
+    id: str | None = Field(default=None, max_length=80)
+    heading: str = Field(min_length=1, max_length=160)
+    body: str = Field(min_length=1, max_length=10_000)
+
+
+class PolicyInput(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+    category: str = Field(default="general", min_length=2, max_length=80)
+    language: str = Field(default="id", pattern="^(id|en)$")
+    effective_date: date
+    expiry_date: date | None = None
+    sections: list[PolicySectionInput] = Field(min_length=1, max_length=50)
+
+
+class PolicyQuestion(BaseModel):
+    question: str = Field(min_length=3, max_length=800)
 
 
 @router.post("/auth/signup")
@@ -1488,6 +1572,98 @@ async def office_from_maps_url(
     }
 
 
+def _policy_sections(payload: PolicyInput) -> list[PolicySection]:
+    return [
+        PolicySection(item.id or f"section-{index + 1}", item.heading.strip(), item.body.strip(), index)
+        for index, item in enumerate(payload.sections)
+    ]
+
+
+@router.get("/policies")
+async def list_policies(x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    return {"items": [policy_payload(item) for item in sorted(store.policies.values(), key=lambda p: p.updated_at, reverse=True)]}
+
+
+@router.post("/policies")
+async def create_policy(payload: PolicyInput, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    if payload.expiry_date and payload.expiry_date < payload.effective_date:
+        raise HTTPException(422, "Tanggal berakhir harus setelah tanggal berlaku")
+    sections = _policy_sections(payload)
+    validate_policy(payload.title, sections)
+    item = PolicyDocument(
+        id=f"policy-{uuid4().hex[:12]}", title=payload.title.strip(), category=payload.category.strip(),
+        language=payload.language, effective_date=payload.effective_date, expiry_date=payload.expiry_date,
+        sections=sections, created_by=user.id, updated_by=user.id,
+    )
+    store.policies[item.id] = item
+    audit("policy.created", user, item.id)
+    return policy_payload(item)
+
+
+@router.put("/policies/{policy_id}")
+async def update_policy(policy_id: str, payload: PolicyInput, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    item = store.policies.get(policy_id)
+    if not item:
+        raise HTTPException(404, "Kebijakan tidak ditemukan")
+    if payload.expiry_date and payload.expiry_date < payload.effective_date:
+        raise HTTPException(422, "Tanggal berakhir harus setelah tanggal berlaku")
+    sections = _policy_sections(payload)
+    validate_policy(payload.title, sections)
+    item.title, item.category, item.language = payload.title.strip(), payload.category.strip(), payload.language
+    item.effective_date, item.expiry_date, item.sections = payload.effective_date, payload.expiry_date, sections
+    item.updated_at, item.updated_by = datetime.now(UTC), user.id
+    audit("policy.updated", user, item.id)
+    return policy_payload(item)
+
+
+@router.post("/policies/{policy_id}/publish")
+async def publish_policy(policy_id: str, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    item = store.policies.get(policy_id)
+    if not item:
+        raise HTTPException(404, "Kebijakan tidak ditemukan")
+    validate_policy(item.title, item.sections)
+    item.state, item.updated_at, item.updated_by = "published", datetime.now(UTC), user.id
+    audit("policy.published", user, item.id)
+    return policy_payload(item)
+
+
+@router.post("/policies/{policy_id}/archive")
+async def archive_policy(policy_id: str, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    item = store.policies.get(policy_id)
+    if not item:
+        raise HTTPException(404, "Kebijakan tidak ditemukan")
+    item.state, item.updated_at, item.updated_by = "archived", datetime.now(UTC), user.id
+    audit("policy.archived", user, item.id)
+    return policy_payload(item)
+
+
+@router.post("/policy-assistant/questions")
+async def policy_question(payload: PolicyQuestion, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    facts = [{"type": "leave_balance", "label": "Sisa cuti tahunan", "value": leave_balance(user.id)["remaining_days"]}]
+    response, outcome = answer_question(
+        policies=list(store.policies.values()), question=payload.question.strip(), today=jakarta_date(), facts=facts
+    )
+    receipt = PolicyAnswerAudit(
+        id=str(uuid4()), actor_id=user.id, question=payload.question.strip()[:800],
+        cited_sections=[{"policy_id": item["policy_id"], "section_id": item["section_id"]} for item in response["citations"]],
+        provider="fake-policy-provider-v1", outcome=outcome, suggested_action=response["suggested_action"]["type"],
+    )
+    store.policy_answer_audit[receipt.id] = receipt
+    audit("policy_assistant.answered", user, receipt.id)
+    return response
+
+
 @router.get("/attendance/today")
 async def attendance_today(x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
@@ -1676,19 +1852,12 @@ async def reverify(
 async def list_leave_requests(x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
     items = [item for item in store.requests.values() if item.employee_id == user.id]
-    approved_days = sum(
-        working_days(item.start, item.end) for item in items if item.status == "approved"
-    )
     return {
         "items": [
             asdict(item) | {"days": working_days(item.start, item.end)}
             for item in sorted(items, key=lambda entry: entry.created_at, reverse=True)
         ],
-        "balance": {
-            "annual_days": 12,
-            "used_days": approved_days,
-            "remaining_days": max(12 - approved_days, 0),
-        },
+        "balance": leave_balance(user.id),
     }
 
 

@@ -18,3 +18,17 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def postgres_sync_url(url: str) -> str:
+    """Convert an API database URL to the sync driver Alembic needs.
+
+    The API uses asyncpg. Alembic's default online migrations are synchronous,
+    and a bare postgresql:// URL would load psycopg2, which is not installed.
+    """
+    if url.startswith("postgresql+asyncpg://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql+asyncpg://")
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
+

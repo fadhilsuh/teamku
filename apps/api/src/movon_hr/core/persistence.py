@@ -42,6 +42,9 @@ from movon_hr.modules.api import (
     OfficeLocation,
     PasswordReset,
     PayrollRun,
+    PolicyAnswerAudit,
+    PolicyDocument,
+    PolicySection,
     Session,
 )
 
@@ -230,6 +233,28 @@ alert_receipts_table = Table(
     Column("employee_id", String, nullable=False),
     Column("kind", String, nullable=False),
     Column("local_date", Date, nullable=False),
+)
+
+policies_table = Table(
+    "policies", metadata,
+    Column("id", String, primary_key=True), Column("tenant_id", String, nullable=False, index=True),
+    Column("title", String, nullable=False), Column("category", String, nullable=False), Column("language", String, nullable=False),
+    Column("effective_date", Date, nullable=False), Column("expiry_date", Date, nullable=True), Column("state", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False), Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("created_by", String, nullable=False), Column("updated_by", String, nullable=False),
+)
+policy_sections_table = Table(
+    "policy_sections", metadata,
+    Column("id", String, primary_key=True), Column("tenant_id", String, nullable=False, index=True),
+    Column("policy_id", String, nullable=False, index=True), Column("heading", String, nullable=False),
+    Column("body", Text, nullable=False), Column("position", Integer, nullable=False),
+)
+policy_answer_audit_table = Table(
+    "policy_answer_audit", metadata,
+    Column("id", String, primary_key=True), Column("tenant_id", String, nullable=False, index=True),
+    Column("actor_id", String, nullable=False), Column("question", Text, nullable=False), Column("cited_sections", JSONB, nullable=False),
+    Column("provider", String, nullable=False), Column("outcome", String, nullable=False), Column("suggested_action", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 _engine: AsyncEngine | None = None
@@ -520,6 +545,25 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     )
                 ).mappings()
             }
+            sections_by_policy: dict[str, list[PolicySection]] = {}
+            for row in (await conn.execute(select(policy_sections_table).where(policy_sections_table.c.tenant_id == tid))).mappings():
+                sections_by_policy.setdefault(row["policy_id"], []).append(PolicySection(row["id"], row["heading"], row["body"], row["position"]))
+            item.policies = {
+                row["id"]: PolicyDocument(
+                    id=row["id"], title=row["title"], category=row["category"], language=row["language"],
+                    effective_date=row["effective_date"], expiry_date=row["expiry_date"], state=row["state"],
+                    sections=sorted(sections_by_policy.get(row["id"], []), key=lambda section: section.position),
+                    created_at=row["created_at"], updated_at=row["updated_at"], created_by=row["created_by"], updated_by=row["updated_by"],
+                )
+                for row in (await conn.execute(select(policies_table).where(policies_table.c.tenant_id == tid))).mappings()
+            }
+            item.policy_answer_audit = {
+                row["id"]: PolicyAnswerAudit(
+                    id=row["id"], actor_id=row["actor_id"], question=row["question"], cited_sections=row["cited_sections"],
+                    provider=row["provider"], outcome=row["outcome"], suggested_action=row["suggested_action"], created_at=row["created_at"],
+                )
+                for row in (await conn.execute(select(policy_answer_audit_table).where(policy_answer_audit_table.c.tenant_id == tid))).mappings()
+            }
             put_store(item)
 
     ids = {row["id"] for row in tenants}
@@ -545,6 +589,9 @@ async def save_store(store: DemoStore) -> None:
         await conn.execute(delete(password_resets_table).where(password_resets_table.c.tenant_id == tid))
         await conn.execute(delete(location_events_table).where(location_events_table.c.tenant_id == tid))
         await conn.execute(delete(alert_receipts_table).where(alert_receipts_table.c.tenant_id == tid))
+        await conn.execute(delete(policy_sections_table).where(policy_sections_table.c.tenant_id == tid))
+        await conn.execute(delete(policies_table).where(policies_table.c.tenant_id == tid))
+        await conn.execute(delete(policy_answer_audit_table).where(policy_answer_audit_table.c.tenant_id == tid))
         await conn.execute(delete(tenants_table).where(tenants_table.c.id == tid))
 
         await conn.execute(
@@ -628,6 +675,11 @@ async def save_store(store: DemoStore) -> None:
                 alert_receipts_table.insert(),
                 [_with_tenant(asdict(item), tid) for item in store.alert_receipts.values()],
             )
+        if store.policies:
+            await conn.execute(policies_table.insert(), [_with_tenant({key: value for key, value in asdict(item).items() if key != "sections"}, tid) for item in store.policies.values()])
+            await conn.execute(policy_sections_table.insert(), [_with_tenant({**asdict(section), "policy_id": item.id}, tid) for item in store.policies.values() for section in item.sections])
+        if store.policy_answer_audit:
+            await conn.execute(policy_answer_audit_table.insert(), [_with_tenant(asdict(item), tid) for item in store.policy_answer_audit.values()])
 
 
 __all__ = [

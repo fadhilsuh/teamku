@@ -16,6 +16,28 @@ port_is_listening() {
   lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+run_database_migrations() {
+  local log_file="$LOG_DIR/migrations.log"
+
+  echo "Checking backend database migrations..."
+  if (
+    cd "$ROOT_DIR/apps/api"
+    env PYTHONPATH=src MOVON_DATABASE_URL="$MOVON_DATABASE_URL" uv run alembic upgrade head
+  ) >"$log_file" 2>&1; then
+    echo "Database migrations are up to date."
+    return
+  fi
+
+  echo "Database migration failed." >&2
+  echo >&2
+  echo "----- Last 40 log lines -----" >&2
+  tail -n 40 "$log_file" >&2
+  echo "-----------------------------" >&2
+  echo >&2
+  echo "Full migration log: $log_file" >&2
+  return 1
+}
+
 start_service() {
   local name="$1"
   local workdir="$2"
@@ -79,6 +101,7 @@ start_service() {
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
+run_database_migrations
 start_service "backend" "$ROOT_DIR/apps/api" 8000 "env PYTHONPATH=src MOVON_DATABASE_URL=$MOVON_DATABASE_URL uv run uvicorn movon_hr.main:app --reload --host 0.0.0.0 --port 8000"
 start_service "frontend" "$ROOT_DIR/apps/web" 3000 "npm run dev -- --hostname 0.0.0.0 --port 3000" true
 

@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from movon_hr.core.persistence import metadata
-from movon_hr.core.settings import settings
+from movon_hr.core.settings import postgres_sync_url, settings
 
 config = context.config
 if config.config_file_name is not None:
@@ -15,7 +15,7 @@ target_metadata = metadata
 
 def _sync_url() -> str:
     url = settings.database_url or "postgresql+asyncpg://movon:movon@localhost:5432/movon"
-    return url.replace("postgresql+asyncpg://", "postgresql://")
+    return postgres_sync_url(url)
 
 
 def run_migrations_offline() -> None:
