@@ -33,6 +33,19 @@ def test_hr_can_add_location_and_assign_employee_to_its_geofence() -> None:
     assert checked_in.json()["distance_meters"] == 0
 
 
+def test_duplicate_location_is_rejected_and_hidden_from_list() -> None:
+    reset_demo_store()
+    hr = login("hr@movon.test")
+    duplicate = client.post("/api/v1/settings/locations", headers=hr, json={
+        "name": "jakarta hq", "latitude": -6.2, "longitude": 106.8166, "radius_meters": 300,
+    })
+    assert duplicate.status_code == 409
+
+    store.office_locations["legacy-copy"] = store.office
+    locations = client.get("/api/v1/settings/locations", headers=hr).json()["items"]
+    assert [item["name"] for item in locations] == ["Jakarta HQ"]
+
+
 def test_field_employee_checkout_records_location_and_dashboard_summarizes_today() -> None:
     reset_demo_store()
     store.employees["e-fresh"].is_remote = True

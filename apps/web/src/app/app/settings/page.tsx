@@ -54,6 +54,8 @@ export default function SettingsPage(){
   const router=useRouter();
   const [form,setForm]=useState<AttendanceSettings>(empty);
   const [locations,setLocations]=useState<AttendanceSettings[]>([]);
+  const [locationMode,setLocationMode]=useState<"single"|"multiple"|null>(null);
+  const [locationStep,setLocationStep]=useState<1|2|3>(1);
   const [mapsLink,setMapsLink]=useState("");
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -141,7 +143,9 @@ export default function SettingsPage(){
         }),
       },token());
       setForm({...empty,...saved});
+      setLocations(current=>current.some(item=>item.id===saved.id)?current.map(item=>item.id===saved.id?saved:item):[saved,...current]);
       setMapsLink(googleMapsOpenUrl(saved.latitude,saved.longitude));
+      setLocationStep(3);
       notify("success",successTitle,successMessage);
     }catch(reason){
       notify("error","Pengaturan gagal disimpan",reason instanceof Error?reason.message:"Pengaturan gagal disimpan.");
@@ -154,8 +158,22 @@ export default function SettingsPage(){
     try{
       const created=await api<AttendanceSettings>("/settings/locations",{method:"POST",body:JSON.stringify({name:form.name.trim(),latitude:Number(form.latitude),longitude:Number(form.longitude),radius_meters:Number(form.radius_meters)})},token());
       setLocations(current=>[...current,created]);
+      setLocationStep(3);
       notify("success","Lokasi kerja ditambahkan",`${created.name} siap ditugaskan ke karyawan.`);
     }catch(reason){notify("error","Lokasi gagal ditambahkan",reason instanceof Error?reason.message:"Lokasi gagal ditambahkan.")}finally{setBusy(false)}
+  }
+
+  function chooseLocationMode(mode:"single"|"multiple"){
+    setLocationMode(mode);setLocationStep(2);
+    if(mode==="multiple"){
+      setForm(current=>({...current,id:undefined,name:"",latitude:0,longitude:0,radius_meters:300}));
+      setMapsLink("");
+    }
+  }
+
+  function addAnotherLocation(){
+    setForm(current=>({...current,id:undefined,name:"",latitude:0,longitude:0,radius_meters:300}));
+    setMapsLink("");setLocationStep(2);
   }
 
   function useCurrentLocation(){
@@ -226,38 +244,49 @@ export default function SettingsPage(){
           <article className="panel settings-panel">
             <div className="panel-head">
               <div>
-                <p className="eyebrow">Office geofence</p>
-                <h2>Lokasi kantor</h2>
+                <p className="eyebrow">Panduan lokasi kerja</p>
+                <h2>Atur lokasi presensi</h2>
               </div>
+              {locationMode&&<button type="button" className="text-button" onClick={()=>{setLocationMode(null);setLocationStep(1)}}>Ubah metode</button>}
             </div>
-            <p className="settings-copy">Hanya HR Admin yang dapat mengubah titik ini. Tempel tautan Share dari Google Maps untuk mengisi koordinat otomatis.</p>
+            <p className="settings-copy">Ikuti tiga langkah berikut. Karyawan kantor hanya dapat check-in di lokasi yang ditugaskan kepadanya.</p>
 
-            <div className="maps-import">
-              <label className="maps-import-field">
-                <span>Tautan Google Maps</span>
-                <input
-                  value={mapsLink}
-                  onChange={event=>setMapsLink(event.target.value)}
-                  placeholder="Tempel link Share Google Maps atau -6.2, 106.8166"
-                />
-              </label>
-              <button type="button" className="secondary-button" disabled={busy} onClick={applyMapsLink}>
-                <Icon name="pin"/>Ambil koordinat
+            <ol className="location-stepper" aria-label="Tahapan pengaturan lokasi">
+              {[{step:1,label:"Pilih metode"},{step:2,label:"Isi lokasi"},{step:3,label:"Review"}].map(item=><li key={item.step} className={locationStep===item.step?"active":locationStep>item.step?"done":""}><span>{locationStep>item.step?"✓":item.step}</span><b>{item.label}</b></li>)}
+            </ol>
+
+            {locationStep===1&&<div className="location-mode-grid">
+              <button type="button" onClick={()=>chooseLocationMode("single")}>
+                <span className="location-mode-icon"><Icon name="pin"/></span><b>Satu lokasi</b><small>Untuk perusahaan dengan satu kantor atau site utama.</small><em>Pilih metode ini →</em>
               </button>
-            </div>
+              <button type="button" onClick={()=>chooseLocationMode("multiple")}>
+                <span className="location-mode-icon multiple">⌘</span><b>Beberapa lokasi</b><small>Untuk kantor cabang, site proyek, atau kota berbeda.</small><em>Pilih metode ini →</em>
+              </button>
+            </div>}
 
-            <div className="form-grid settings-form">
-              <label>Nama lokasi<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})} placeholder="Contoh: Jakarta HQ"/></label>
-              <label>Radius check-in (meter)<input type="number" min={50} max={5000} step={10} value={form.radius_meters} onChange={event=>setForm({...form,radius_meters:Number(event.target.value)})}/></label>
-              <label>Latitude<input type="number" step="0.000001" value={form.latitude} onChange={event=>setForm({...form,latitude:Number(event.target.value)})}/></label>
-              <label>Longitude<input type="number" step="0.000001" value={form.longitude} onChange={event=>setForm({...form,longitude:Number(event.target.value)})}/></label>
-            </div>
-            <div className="settings-actions">
-              <button type="button" className="secondary-button" disabled={busy} onClick={useCurrentLocation}><Icon name="pin"/>Gunakan lokasi saya</button>
-              <button type="button" className="secondary-button" disabled={busy} onClick={addLocation}>+ Tambah lokasi baru</button>
-              <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Lokasi kantor diperbarui","Lokasi kantor berhasil diperbarui. Aturan check-in langsung memakai titik ini.")}>{busy?"Menyimpan…":"Simpan lokasi kantor"}</button>
-            </div>
-            <div className="location-list"><b>{locations.length} lokasi kerja</b>{locations.map(location=><button type="button" key={location.id||location.name} onClick={()=>{setForm({...empty,...location});setMapsLink(googleMapsOpenUrl(location.latitude,location.longitude))}}><span>{location.name}</span><small>Radius {location.radius_meters} m</small></button>)}</div>
+            {locationStep===2&&<div className="location-form-step">
+              <div className="step-instruction"><span>2</span><div><b>{locationMode==="single"?"Isi lokasi utama":"Tambahkan satu lokasi"}</b><small>Gunakan tautan Google Maps agar koordinat terisi otomatis, lalu tentukan nama dan radius.</small></div></div>
+
+              <div className="maps-import">
+                <label className="maps-import-field"><span>1. Tempel tautan Google Maps</span><input value={mapsLink} onChange={event=>setMapsLink(event.target.value)} placeholder="https://maps.google.com/... atau -6.2, 106.8166"/></label>
+                <button type="button" className="secondary-button" disabled={busy} onClick={applyMapsLink}><Icon name="pin"/>Ambil koordinat</button>
+              </div>
+
+              <button type="button" className="use-device-location" disabled={busy} onClick={useCurrentLocation}>Tidak punya link? <b><Icon name="pin"/> Gunakan lokasi perangkat ini</b></button>
+              <div className="form-grid settings-form">
+                <label>2. Nama lokasi<input value={form.name} onChange={event=>setForm({...form,name:event.target.value})} placeholder="Contoh: Site Bandung"/></label>
+                <label>3. Radius check-in (meter)<input type="number" min={50} max={5000} step={10} value={form.radius_meters} onChange={event=>setForm({...form,radius_meters:Number(event.target.value)})}/><small>Disarankan 100–300 meter.</small></label>
+                <label>Latitude<input type="number" step="0.000001" value={form.latitude} onChange={event=>setForm({...form,latitude:Number(event.target.value)})}/></label>
+                <label>Longitude<input type="number" step="0.000001" value={form.longitude} onChange={event=>setForm({...form,longitude:Number(event.target.value)})}/></label>
+              </div>
+              <div className="step-navigation"><button type="button" className="secondary-button" onClick={()=>setLocationStep(1)}>← Kembali</button><button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>locationMode==="single"?save("Lokasi utama aktif","Lokasi utama berhasil disimpan dan siap ditugaskan."):addLocation()}>{busy?"Menyimpan…":locationMode==="single"?"Simpan & aktifkan":"Tambahkan ke daftar"}</button></div>
+            </div>}
+
+            {locationStep===3&&<div className="location-review-step">
+              <div className="setup-success"><span>✓</span><div><b>{locationMode==="single"?"Lokasi utama berhasil diaktifkan":"Lokasi berhasil ditambahkan"}</b><small>{locationMode==="single"?"Selanjutnya, tetapkan lokasi ini dari profil karyawan.":"Kamu dapat menambahkan lokasi berikutnya atau menyelesaikan setup."}</small></div></div>
+              <div className="location-list"><div><b>{locations.length} lokasi kerja</b><small>Pilih lokasi dari profil karyawan untuk menentukan geofence mereka.</small></div>{locations.map(location=><article key={location.id||location.name}><span><Icon name="pin"/></span><div><b>{location.name}</b><small>Radius {location.radius_meters} m</small></div>{location.id==="office-default"&&<em>Utama</em>}</article>)}</div>
+              <div className="step-navigation">{locationMode==="multiple"&&<button type="button" className="secondary-button" onClick={addAnotherLocation}>+ Tambah lokasi berikutnya</button>}<button type="button" className="primary-action auto-width" onClick={()=>{setLocationMode(null);setLocationStep(1)}}>Selesai</button></div>
+            </div>}
           </article>
 
           <aside className="panel settings-side">

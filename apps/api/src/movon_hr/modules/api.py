@@ -1715,13 +1715,20 @@ async def list_work_locations(x_demo_user: str | None = Header(default=None)) ->
     actor(x_demo_user)
     if not store.office_locations:
         store.office_locations = {store.office.id: store.office}
-    return {"items": [office_payload(item) for item in store.office_locations.values()]}
+    unique: dict[tuple[str, float, float], OfficeLocation] = {}
+    for item in store.office_locations.values():
+        key = (item.name.strip().casefold(), round(item.latitude, 6), round(item.longitude, 6))
+        unique.setdefault(key, item)
+    return {"items": [office_payload(item) for item in unique.values()]}
 
 
 @router.post("/settings/locations")
 async def create_work_location(payload: WorkLocationInput, x_demo_user: str | None = Header(default=None)) -> dict:
     user = actor(x_demo_user)
     require(user, "hr_admin")
+    duplicate = next((item for item in store.office_locations.values() if item.name.strip().casefold() == payload.name.strip().casefold() or (abs(item.latitude - payload.latitude) < 0.000001 and abs(item.longitude - payload.longitude) < 0.000001)), None)
+    if duplicate:
+        raise HTTPException(409, f"Lokasi {duplicate.name} sudah terdaftar")
     location = OfficeLocation(id=f"location-{uuid4().hex[:8]}", **payload.model_dump())
     store.office_locations[location.id] = location
     audit("settings.location_created", user, location.id)
@@ -1744,6 +1751,7 @@ async def update_office_settings(
     current.update(payload.model_dump(exclude_unset=True))
     validate_office_policy(current)
     store.office = OfficeLocation(**current)
+    store.office_locations[store.office.id] = store.office
     audit("settings.office_updated", user, store.office.name)
     return office_payload()
 
