@@ -15,8 +15,11 @@ type Employee={
   status:string;
   salary?:number|null;
   is_remote?:boolean;
+  work_location_id?:string|null;
+  work_location?:{id:string;name:string}|null;
 };
 type User={id:string;role:string};
+type WorkLocation={id:string;name:string};
 type LocationEvent={
   id:string;
   kind:string;
@@ -42,6 +45,7 @@ export default function EmployeeDetail(){
   const [employee,setEmployee]=useState<Employee>();
   const [events,setEvents]=useState<LocationEvent[]|null>(null);
   const [role,setRole]=useState("");
+  const [locations,setLocations]=useState<WorkLocation[]>([]);
   const [busy,setBusy]=useState(false);
   const [notification,setNotification]=useState<NotificationDialogState|null>(null);
   const token=()=>localStorage.getItem("movon_user")||undefined;
@@ -53,9 +57,11 @@ export default function EmployeeDetail(){
     Promise.all([
       api<Employee>(`/employees/${id}`,{},auth),
       api<{user:User}>("/me",{},auth),
-    ]).then(([profile,me])=>{
+      api<{items:WorkLocation[]}>("/settings/locations",{},auth),
+    ]).then(([profile,me,locationResult])=>{
       setEmployee(profile);
       setRole(me.user.role);
+      setLocations(locationResult.items);
       if(me.user.role==="manager"||me.user.role==="hr_admin"){
         return api<{items:LocationEvent[]}>(`/employees/${id}/location-history`,{},auth).then(history=>setEvents(history.items));
       }
@@ -80,6 +86,15 @@ export default function EmployeeDetail(){
     }catch(reason){
       notify("error","Perubahan gagal",reason instanceof Error?reason.message:"Status remote gagal diperbarui.");
     }finally{setBusy(false)}
+  }
+
+  async function assignLocation(workLocationId:string){
+    if(!employee||role!=="hr_admin")return;
+    setBusy(true);
+    try{
+      const updated=await api<Employee>(`/employees/${employee.id}`,{method:"PATCH",body:JSON.stringify({work_location_id:workLocationId})},token());
+      setEmployee(updated);notify("success","Lokasi kerja diperbarui",`${employee.name} kini ditugaskan ke ${updated.work_location?.name}.`);
+    }catch(reason){notify("error","Perubahan gagal",reason instanceof Error?reason.message:"Lokasi kerja gagal diperbarui.")}finally{setBusy(false)}
   }
 
   if(!employee){
@@ -109,20 +124,21 @@ export default function EmployeeDetail(){
             <p className="eyebrow">Profil</p>
             <h2>Ringkasan karyawan</h2>
           </div>
-          <span className={`status ${employee.is_remote?"remote":"office"}`}>{employee.is_remote?"Remote":"Kantor"}</span>
+          <span className={`status ${employee.is_remote?"remote":"office"}`}>{employee.is_remote?"Sales / Lapangan":employee.work_location?.name||"Kantor"}</span>
         </div>
         <dl className="settings-preview">
           <div><dt>Email</dt><dd>{employee.email}</dd></div>
           <div><dt>Peran</dt><dd>{employee.role==="hr_admin"?"HR Admin":employee.role==="manager"?"Manager":"Employee"}</dd></div>
           <div><dt>Status</dt><dd>{employee.status==="active"?"Aktif":employee.status==="suspended"?"Ditangguhkan":"Berakhir"}</dd></div>
           <div><dt>Gaji</dt><dd>{employee.salary!=null?formatMoney(employee.salary):"Tidak berwenang"}</dd></div>
-          <div><dt>Lokasi kerja</dt><dd>{employee.is_remote?"Pekerja remote (bebas lokasi)":"Pekerja kantor (terikat geofence)"}</dd></div>
+          <div><dt>Lokasi kerja</dt><dd>{employee.is_remote?"Sales / lapangan (lokasi dicatat)":employee.work_location?.name||"Kantor utama"}</dd></div>
         </dl>
         {role==="hr_admin"&&(
           <div className="settings-actions">
             <button type="button" className="secondary-button" disabled={busy} onClick={toggleRemote}>
-              {employee.is_remote?"Ubah ke pekerja kantor":"Tandai sebagai remote"}
+              {employee.is_remote?"Ubah ke pekerja kantor":"Tandai sebagai sales/lapangan"}
             </button>
+            {!employee.is_remote&&<select aria-label="Tetapkan lokasi kerja" disabled={busy} value={employee.work_location_id||"office-default"} onChange={event=>assignLocation(event.target.value)}>{locations.map(location=><option key={location.id} value={location.id}>{location.name}</option>)}</select>}
           </div>
         )}
       </article>

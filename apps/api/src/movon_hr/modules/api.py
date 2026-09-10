@@ -69,6 +69,7 @@ class Employee:
     password_hash: str = ""
     tenant_id: str = ""
     is_remote: bool = False
+    work_location_id: str | None = "office-default"
 
 
 @dataclass
@@ -94,6 +95,7 @@ class Invitation:
     expires_at: datetime
     accepted_at: datetime | None = None
     is_remote: bool = False
+    work_location_id: str | None = None
 
 
 @dataclass
@@ -219,6 +221,7 @@ class PolicyAnswerAudit:
 
 @dataclass
 class OfficeLocation:
+    id: str = "office-default"
     name: str = "Jakarta HQ"
     latitude: float = -6.2
     longitude: float = 106.8166
@@ -263,6 +266,7 @@ class DemoStore:
     idempotency: dict[str, str] = field(default_factory=dict)
     audit: list[dict] = field(default_factory=list)
     office: OfficeLocation = field(default_factory=OfficeLocation)
+    office_locations: dict[str, OfficeLocation] = field(default_factory=dict)
     calendar: CalendarSettings = field(default_factory=CalendarSettings)
     invitations: dict[str, Invitation] = field(default_factory=dict)
     password_resets: dict[str, PasswordReset] = field(default_factory=dict)
@@ -388,6 +392,7 @@ def reset_demo_store() -> None:
     store.sessions = {}
     store.audit = []
     store.office = OfficeLocation()
+    store.office_locations = {store.office.id: store.office}
     store.invitations = {}
     store.password_resets = {}
     store.alert_receipts = {}
@@ -547,6 +552,9 @@ def public_employee(employee: Employee, *, hide_salary: bool = False) -> dict:
     }
     if hide_salary:
         data["salary"] = None
+    location = current_office(employee) if not employee.is_remote else None
+    data["work_mode"] = "field" if employee.is_remote else "office"
+    data["work_location"] = office_payload(location) if location else None
     return data
 
 
@@ -732,13 +740,16 @@ def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return 2 * radius * asin(sqrt(value))
 
 
-def current_office() -> OfficeLocation:
+def current_office(employee: Employee | None = None) -> OfficeLocation:
+    if employee and employee.work_location_id:
+        return store.office_locations.get(employee.work_location_id, store.office)
     return store.office
 
 
 def office_payload(office: OfficeLocation | None = None) -> dict:
     item = office or current_office()
     return {
+        "id": item.id,
         "name": item.name,
         "latitude": item.latitude,
         "longitude": item.longitude,
@@ -767,13 +778,13 @@ def calendar_payload() -> dict:
     }
 
 
-def office_distance_meters(latitude: float, longitude: float) -> float:
-    office = current_office()
+def office_distance_meters(latitude: float, longitude: float, employee: Employee | None = None) -> float:
+    office = current_office(employee)
     return haversine_meters(latitude, longitude, office.latitude, office.longitude)
 
 
-def allowed_check_in_radius_meters(accuracy_meters: float) -> float:
-    return current_office().radius_meters + min(max(accuracy_meters, 0), MAX_ACCURACY_CREDIT_METERS)
+def allowed_check_in_radius_meters(accuracy_meters: float, employee: Employee | None = None) -> float:
+    return current_office(employee).radius_meters + min(max(accuracy_meters, 0), MAX_ACCURACY_CREDIT_METERS)
 
 
 REVERIFY_GRACE_MINUTES = 15
@@ -1148,6 +1159,7 @@ class InviteInput(BaseModel):
     title: str = Field(default="Staff", min_length=2, max_length=100)
     salary: int = Field(default=8_000_000, ge=0, le=10_000_000_000)
     is_remote: bool = False
+    work_location_id: str | None = None
 
 
 class AcceptInvite(BaseModel):
@@ -1181,6 +1193,9 @@ class CheckIn(BaseModel):
 
 class CheckOut(BaseModel):
     summary: str = Field(min_length=4, max_length=1000)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_meters: float | None = Field(default=None, ge=0, le=10_000)
 
 
 class ReverifyInput(BaseModel):
@@ -1204,6 +1219,13 @@ class OfficeSettingsInput(BaseModel):
     clock_out_reminder_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     max_open_hours: int | None = Field(default=None, ge=1, le=24)
     alert_managers: bool | None = None
+
+
+class WorkLocationInput(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_meters: float = Field(default=300, ge=50, le=5_000)
 
 
 class CalendarSettingsInput(BaseModel):
@@ -1245,11 +1267,13 @@ class EmployeeInput(BaseModel):
     # Optional initial password; when omitted a temporary one is generated.
     password: str | None = Field(default=None, min_length=8, max_length=128)
     is_remote: bool = False
+    work_location_id: str | None = None
 
 
 class EmployeeUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(active|suspended|terminated)$")
     is_remote: bool | None = None
+    work_location_id: str | None = None
 
 
 class PolicySectionInput(BaseModel):
@@ -1378,6 +1402,7 @@ async def create_invite(
         invited_by=user.id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
         is_remote=payload.is_remote,
+        work_location_id=payload.work_location_id,
     )
     store.invitations[invitation.token] = invitation
     invite_url = app_url(f"/invite?token={invitation.token}")
@@ -1443,6 +1468,7 @@ async def accept_invite(payload: AcceptInvite) -> JSONResponse:
         password_hash=hash_password(payload.password),
         tenant_id=tenant_store.tenant_id,
         is_remote=invitation.is_remote,
+        work_location_id=invitation.work_location_id,
     )
     store.employees[employee.id] = employee
     invitation.accepted_at = datetime.now(UTC)
@@ -1549,13 +1575,24 @@ async def dashboard(x_demo_user: str | None = Header(default=None)) -> dict:
         for item in store.requests.values()
         if item.status == "pending" and item.employee_id in employee_ids
     ]
+    present_ids = {item.employee_id for item in sessions}
+    leave_today_ids = {
+        item.employee_id for item in store.requests.values()
+        if item.status == "approved" and item.start <= today <= item.end and item.employee_id in employee_ids
+    }
+    absent_ids = employee_ids - present_ids - leave_today_ids
+    late_ids = {
+        item.employee_id for item in sessions
+        if item.checked_in_at.astimezone(JAKARTA).time() >= time(9, 0)
+    }
     return {
         "current_user": public_employee(user),
         "headcount": len(employees),
-        "present": len({item.employee_id for item in sessions}),
-        "late": sum(
-            1 for item in sessions if item.checked_in_at.astimezone(JAKARTA).time().hour >= 9
-        ),
+        "present": len(present_ids),
+        "absent": len(absent_ids),
+        "on_leave": len(leave_today_ids),
+        "late": len(late_ids),
+        "attendance_rate": round(len(present_ids) / len(employees) * 100) if employees else 0,
         "pending_approvals": len(pending) if user.role in {"manager", "hr_admin"} else 0,
         "agenda_total": len(agenda_items),
         "agenda_completed": sum(1 for item in agenda_items if item.get("status") == "done"),
@@ -1664,7 +1701,31 @@ async def update_employee(
     if payload.is_remote is not None:
         employee.is_remote = payload.is_remote
         audit("employee.remote_changed", user, employee.id)
+    if payload.work_location_id is not None:
+        if payload.work_location_id not in store.office_locations:
+            raise HTTPException(422, "Lokasi kerja tidak ditemukan")
+        employee.work_location_id = payload.work_location_id
+        employee.is_remote = False
+        audit("employee.location_changed", user, employee.id)
     return public_employee(employee)
+
+
+@router.get("/settings/locations")
+async def list_work_locations(x_demo_user: str | None = Header(default=None)) -> dict:
+    actor(x_demo_user)
+    if not store.office_locations:
+        store.office_locations = {store.office.id: store.office}
+    return {"items": [office_payload(item) for item in store.office_locations.values()]}
+
+
+@router.post("/settings/locations")
+async def create_work_location(payload: WorkLocationInput, x_demo_user: str | None = Header(default=None)) -> dict:
+    user = actor(x_demo_user)
+    require(user, "hr_admin")
+    location = OfficeLocation(id=f"location-{uuid4().hex[:8]}", **payload.model_dump())
+    store.office_locations[location.id] = location
+    audit("settings.location_created", user, location.id)
+    return office_payload(location)
 
 
 @router.get("/settings/office")
@@ -1954,9 +2015,9 @@ async def check_in(
         raise HTTPException(422, "Selfie kamera langsung wajib untuk kebijakan ini")
     if not payload.location_share_approved:
         raise HTTPException(422, "Persetujuan berbagi lokasi diperlukan untuk check-in")
-    distance = office_distance_meters(payload.latitude, payload.longitude)
-    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters)
-    office = current_office()
+    distance = office_distance_meters(payload.latitude, payload.longitude, user)
+    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters, user)
+    office = current_office(user)
     if not user.is_remote and distance > allowed_radius:
         raise HTTPException(
             403,
@@ -2025,11 +2086,21 @@ async def check_out(
             event.at = datetime.now(UTC)
     record.checked_out_at = datetime.now(UTC)
     record.summary = payload.summary
+    checkout_distance = None
+    checkout_inside = None
+    if payload.latitude is not None and payload.longitude is not None:
+        checkout_distance = office_distance_meters(payload.latitude, payload.longitude, user)
+        checkout_inside = user.is_remote or checkout_distance <= allowed_check_in_radius_meters(payload.accuracy_meters or 0, user)
     record_location_event(
         employee_id=user.id,
         attendance_id=record.id,
         kind="check_out",
         at=record.checked_out_at,
+        lat=payload.latitude,
+        lng=payload.longitude,
+        accuracy=payload.accuracy_meters,
+        distance_meters=round(checkout_distance) if checkout_distance is not None else None,
+        inside_geofence=checkout_inside,
     )
     audit("attendance.check_out", user, record.id)
     return {
@@ -2054,8 +2125,8 @@ async def reverify(
     if not record:
         raise HTTPException(409, "Tidak ada sesi kehadiran terbuka")
     pending = pending_reverify_for(record)
-    distance = office_distance_meters(payload.latitude, payload.longitude)
-    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters)
+    distance = office_distance_meters(payload.latitude, payload.longitude, user)
+    allowed_radius = allowed_check_in_radius_meters(payload.accuracy_meters, user)
     now = datetime.now(UTC)
 
     if user.is_remote:

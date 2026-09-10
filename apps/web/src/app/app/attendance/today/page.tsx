@@ -33,10 +33,7 @@ export default function Today(){
 
   function notify(type:NotificationDialogState["type"],title:string,message:string){setNotification({type,title,message})}
 
-  const load=()=>Promise.all([
-    api<AttendanceState>("/attendance/today",{},token()),
-    api<OfficeSettings>("/settings/office",{},token()),
-  ]).then(([today,officeSettings])=>{setAttendance(today);setOffice(officeSettings)}).catch(e=>notify("error","Tidak dapat melanjutkan",e.message));
+  const load=()=>Promise.all([api<AttendanceState>("/attendance/today",{},token()),api<{user:{work_location:OfficeSettings|null}}>("/me",{},token())]).then(([today,profile])=>{setAttendance(today);if(profile.user.work_location)setOffice(profile.user.work_location)}).catch(e=>notify("error","Tidak dapat melanjutkan",e.message));
 
   function stopCamera(){
     cameraStream.current?.getTracks().forEach(track=>track.stop());
@@ -142,7 +139,8 @@ export default function Today(){
     if(summary.trim().length<4){notify("error","Ringkasan belum lengkap","Tuliskan ringkasan pencapaian minimal 4 karakter sebelum check-out.");return}
     setBusy(true);
     try{
-      const result=await api<{effective_hours:number}>("/attendance/check-out",{method:"POST",body:JSON.stringify({summary})},token());
+      const position=await new Promise<GeolocationPosition>((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:15000,maximumAge:0}));
+      const result=await api<{effective_hours:number}>("/attendance/check-out",{method:"POST",body:JSON.stringify({summary,latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_meters:position.coords.accuracy})},token());
       notify("success","Check-out berhasil",`Durasi kerja efektif ${result.effective_hours} jam.`);
       await load();
     }catch(reason){

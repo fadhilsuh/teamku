@@ -16,10 +16,13 @@ type Employee={
   status:string;
   salary?:number|null;
   is_remote?:boolean;
+  work_location_id?:string|null;
+  work_location?:{name:string}|null;
 };
 type User={role:string};
+type WorkLocation={id:string;name:string};
 
-const emptyForm={name:"",email:"",department:"Engineering",title:"Staff",role:"employee",salary:"8000000",is_remote:false};
+const emptyForm={name:"",email:"",department:"Engineering",title:"Staff",role:"employee",salary:"8000000",is_remote:false,work_location_id:"office-default"};
 
 export default function People(){
   const router=useRouter();
@@ -31,14 +34,17 @@ export default function People(){
   const [busy,setBusy]=useState(false);
   const [form,setForm]=useState(emptyForm);
   const [role,setRole]=useState("");
+  const [locations,setLocations]=useState<WorkLocation[]>([]);
   const token=()=>localStorage.getItem("movon_user")||undefined;
   const notify=(type:NotificationDialogState["type"],title:string,message:string)=>setNotification({type,title,message});
   const load=()=>Promise.all([
     api<{items:Employee[]}>("/employees",{},token()),
     api<{user:User}>("/me",{},token()),
-  ]).then(([people,profile])=>{
+    api<{items:WorkLocation[]}>("/settings/locations",{},token()),
+  ]).then(([people,profile,locationResult])=>{
     setItems(people.items);
     setRole(profile.user.role);
+    setLocations(locationResult.items);
   }).catch(reason=>notify("error","Direktori gagal dimuat",reason instanceof Error?reason.message:"Data karyawan gagal dimuat."));
 
   useEffect(()=>{load()},[]);
@@ -141,7 +147,7 @@ export default function People(){
                 </td>
                 <td>{employee.department}</td>
                 <td>{employee.title}</td>
-                <td><span className={`status ${employee.is_remote?"remote":"office"}`}>{employee.is_remote?"Remote":"Kantor"}</span></td>
+                <td><span className={`status ${employee.is_remote?"remote":"office"}`}>{employee.is_remote?"Sales / Lapangan":employee.work_location?.name||"Kantor"}</span></td>
                 <td>{employee.role==="hr_admin"?"HR Admin":employee.role==="manager"?"Manager":"Employee"}</td>
                 <td><span className={`status ${employee.status}`}>{employee.status==="active"?"Aktif":employee.status==="suspended"?"Ditangguhkan":"Berakhir"}</span></td>
                 <td>{employee.salary!=null?formatMoney(employee.salary):"Tidak berwenang"}</td>
@@ -181,12 +187,13 @@ export default function People(){
               </select>
             </label>
             <label>Gaji bulanan<input type="number" min="0" value={form.salary} onChange={event=>setForm({...form,salary:event.target.value})}/></label>
+            {!form.is_remote&&<label>Lokasi kerja<select value={form.work_location_id} onChange={event=>setForm({...form,work_location_id:event.target.value})}>{locations.map(location=><option key={location.id} value={location.id}>{location.name}</option>)}</select></label>}
           </div>
           <label className={`location-consent ${form.is_remote?"approved":""}`}>
             <input type="checkbox" checked={form.is_remote} onChange={event=>setForm({...form,is_remote:event.target.checked})}/>
             <span>
-              <b>Pekerja remote (bebas lokasi)</b>
-              <small>Check-in dan re-verifikasi tidak menolak berdasarkan radius kantor.</small>
+              <b>Sales / pekerja lapangan</b>
+              <small>Clock-in dan clock-out boleh dari luar kantor; setiap titik tetap masuk ke riwayat lokasi.</small>
             </span>
           </label>
           <div className="dialog-actions">

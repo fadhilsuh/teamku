@@ -6,7 +6,7 @@ import {NotificationDialog,NotificationDialogState} from "../../../components/No
 import {api} from "../../../lib/api";
 
 type Attendance={checked_in_at:string;checked_out_at?:string;anomaly?:string};
-type Dashboard={current_user:{name:string;role:string};headcount:number;present:number;late:number;pending_approvals:number;agenda_total:number;agenda_completed:number;attendance:Attendance[]};
+type Dashboard={current_user:{name:string;role:string};headcount:number;present:number;absent:number;on_leave:number;late:number;attendance_rate:number;pending_approvals:number;agenda_total:number;agenda_completed:number;attendance:Attendance[]};
 type Leave={items:{status:string}[];balance:{remaining_days:number}};
 type Payslip={period:string;published_at:string};
 type Office={name:string};
@@ -52,6 +52,14 @@ function Home({data,leave,payslip,officeName}:{data:Dashboard;leave:Leave|undefi
       <div className="home-date-picker">▣ <span>{formatLongDate(currentTime)}</span></div>
     </header>
 
+    {!isEmployee&&<div className="workforce-recap" aria-label="Ringkasan tenaga kerja hari ini">
+      <Recap label="Total headcount" value={data.headcount} tone="ink" detail="Karyawan aktif"/>
+      <Recap label="Hadir" value={data.present} tone="green" detail={`${data.attendance_rate}% tingkat kehadiran`}/>
+      <Recap label="Tidak masuk" value={data.absent} tone="red" detail="Belum presensi, tanpa cuti"/>
+      <Recap label="Cuti hari ini" value={data.on_leave} tone="purple" detail="Permohonan disetujui"/>
+      <Recap label="Clock-in telat" value={data.late} tone="orange" detail="Setelah pukul 09.00"/>
+    </div>}
+
     <div className="home-primary-grid">
       <article className="home-card attendance-card">
         <div className="home-card-head"><div><span className="home-icon red">◷</span><h2>{isEmployee?"Kehadiran hari ini":"Kehadiran tim hari ini"}</h2></div><span className="home-time"><i/>{checkedIn?time(attendance!.checked_in_at):"09:00 WIB"}</span></div>
@@ -78,6 +86,7 @@ function Home({data,leave,payslip,officeName}:{data:Dashboard;leave:Leave|undefi
 
 function AgendaRow({title,detail,index}:{title:string;detail:string;index:number}){return <div className="agenda-row"><span className="agenda-check"/><div><b>{title}</b><small>{detail}</small></div><time>{index===1?"Hari ini":"Selanjutnya"}</time></div>}
 function SummaryCard({icon,tone,label,value,detail,action,href}:{icon:string;tone:string;label:string;value:string;detail:string;action:string;href:string}){return <article className="home-summary-card"><span className={`summary-icon ${tone}`}>{icon}</span><div><p>{label}</p><b>{value}</b><small>{detail}</small></div><Link href={href} className="summary-action">{action}</Link></article>}
+function Recap({label,value,tone,detail}:{label:string;value:number;tone:string;detail:string}){return <article className={`recap-card ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>}
 function Clock(){return <div className="home-clock" aria-hidden="true"><i/><b/></div>}
 function HomeLoading(){return <section className="home-page home-loading"><div/><div/><div/></section>}
 function now(){return new Date()}

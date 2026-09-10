@@ -8,6 +8,7 @@ import {api} from "../../../lib/api";
 import {googleMapsEmbedUrl,googleMapsOpenUrl,isGoogleMapsShortUrl,parseGoogleMapsLocation} from "../../../lib/googleMaps";
 
 type AttendanceSettings={
+  id?:string;
   name:string;
   latitude:number;
   longitude:number;
@@ -52,6 +53,7 @@ function ProviderMark({provider}:{provider:"google"|"microsoft"}){
 export default function SettingsPage(){
   const router=useRouter();
   const [form,setForm]=useState<AttendanceSettings>(empty);
+  const [locations,setLocations]=useState<AttendanceSettings[]>([]);
   const [mapsLink,setMapsLink]=useState("");
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -71,11 +73,13 @@ export default function SettingsPage(){
       api<{user:User}>("/me",{},auth),
       api<AttendanceSettings>("/settings/office",{},auth),
       api<CalendarSettings>("/settings/calendar",{},auth),
-    ]).then(([profile,office,calendarSettings])=>{
+      api<{items:AttendanceSettings[]}>("/settings/locations",{},auth),
+    ]).then(([profile,office,calendarSettings,locationResult])=>{
       if(profile.user.role!=="hr_admin"){router.replace("/app/overview");return}
       setForm({...empty,...office});
       setMapsLink(googleMapsOpenUrl(office.latitude,office.longitude));
       setCalendar({...emptyCalendar,...calendarSettings});
+      setLocations(locationResult.items);
       setCalendarAccount(calendarSettings.connected);
       if(calendarSettings.connected) loadGoogleCalendars();
       setLoading(false);
@@ -142,6 +146,16 @@ export default function SettingsPage(){
     }catch(reason){
       notify("error","Pengaturan gagal disimpan",reason instanceof Error?reason.message:"Pengaturan gagal disimpan.");
     }finally{setBusy(false)}
+  }
+
+  async function addLocation(){
+    if(form.name.trim().length<2){notify("error","Nama lokasi belum lengkap","Isi nama site atau kantor terlebih dahulu.");return}
+    setBusy(true);
+    try{
+      const created=await api<AttendanceSettings>("/settings/locations",{method:"POST",body:JSON.stringify({name:form.name.trim(),latitude:Number(form.latitude),longitude:Number(form.longitude),radius_meters:Number(form.radius_meters)})},token());
+      setLocations(current=>[...current,created]);
+      notify("success","Lokasi kerja ditambahkan",`${created.name} siap ditugaskan ke karyawan.`);
+    }catch(reason){notify("error","Lokasi gagal ditambahkan",reason instanceof Error?reason.message:"Lokasi gagal ditambahkan.")}finally{setBusy(false)}
   }
 
   function useCurrentLocation(){
@@ -240,8 +254,10 @@ export default function SettingsPage(){
             </div>
             <div className="settings-actions">
               <button type="button" className="secondary-button" disabled={busy} onClick={useCurrentLocation}><Icon name="pin"/>Gunakan lokasi saya</button>
+              <button type="button" className="secondary-button" disabled={busy} onClick={addLocation}>+ Tambah lokasi baru</button>
               <button type="button" className="primary-action auto-width" disabled={busy} onClick={()=>save("Lokasi kantor diperbarui","Lokasi kantor berhasil diperbarui. Aturan check-in langsung memakai titik ini.")}>{busy?"Menyimpan…":"Simpan lokasi kantor"}</button>
             </div>
+            <div className="location-list"><b>{locations.length} lokasi kerja</b>{locations.map(location=><button type="button" key={location.id||location.name} onClick={()=>{setForm({...empty,...location});setMapsLink(googleMapsOpenUrl(location.latitude,location.longitude))}}><span>{location.name}</span><small>Radius {location.radius_meters} m</small></button>)}</div>
           </article>
 
           <aside className="panel settings-side">

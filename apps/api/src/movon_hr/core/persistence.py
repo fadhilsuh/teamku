@@ -74,6 +74,17 @@ employees_table = Table(
     Column("salary", Integer, nullable=False),
     Column("password_hash", String, nullable=False, server_default=""),
     Column("is_remote", Boolean, nullable=False, server_default="false"),
+    Column("work_location_id", String, nullable=True, server_default="office-default"),
+)
+
+office_locations_table = Table(
+    "office_locations", metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False, index=True),
+    Column("name", String, nullable=False),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    Column("radius_meters", Float, nullable=False),
 )
 
 attendance_table = Table(
@@ -214,6 +225,7 @@ invitations_table = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("accepted_at", DateTime(timezone=True), nullable=True),
     Column("is_remote", Boolean, nullable=False, server_default="false"),
+    Column("work_location_id", String, nullable=True),
 )
 
 password_resets_table = Table(
@@ -362,6 +374,7 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     password_hash=row["password_hash"],
                     tenant_id=row["tenant_id"],
                     is_remote=bool(row.get("is_remote") or False),
+                    work_location_id=row.get("work_location_id") or "office-default",
                 )
                 for row in (
                     await conn.execute(
@@ -498,6 +511,11 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     max_open_hours=int(office_row.get("max_open_hours") or 10),
                     alert_managers=bool(office_row.get("alert_managers") or False),
                 )
+            location_rows = (await conn.execute(select(office_locations_table).where(office_locations_table.c.tenant_id == tid))).mappings().all()
+            item.office_locations = {
+                row["id"]: OfficeLocation(id=row["id"], name=row["name"], latitude=row["latitude"], longitude=row["longitude"], radius_meters=row["radius_meters"])
+                for row in location_rows
+            } or {item.office.id: item.office}
             calendar_row = (await conn.execute(select(calendar_settings_table).where(calendar_settings_table.c.tenant_id == tid))).mappings().first()
             if calendar_row:
                 item.calendar = CalendarSettings(**{key: calendar_row.get(key) for key in CalendarSettings.__dataclass_fields__})
@@ -515,6 +533,7 @@ async def load_store(store: DemoStore | None = None) -> bool:
                     expires_at=row["expires_at"],
                     accepted_at=row["accepted_at"],
                     is_remote=bool(row.get("is_remote") or False),
+                    work_location_id=row.get("work_location_id"),
                 )
                 for row in (
                     await conn.execute(
@@ -611,6 +630,7 @@ async def save_store(store: DemoStore) -> None:
         await conn.execute(delete(idempotency_table).where(idempotency_table.c.tenant_id == tid))
         await conn.execute(delete(audit_table).where(audit_table.c.tenant_id == tid))
         await conn.execute(delete(office_table).where(office_table.c.tenant_id == tid))
+        await conn.execute(delete(office_locations_table).where(office_locations_table.c.tenant_id == tid))
         await conn.execute(delete(invitations_table).where(invitations_table.c.tenant_id == tid))
         await conn.execute(delete(password_resets_table).where(password_resets_table.c.tenant_id == tid))
         await conn.execute(delete(location_events_table).where(location_events_table.c.tenant_id == tid))
@@ -679,8 +699,13 @@ async def save_store(store: DemoStore) -> None:
             )
         await conn.execute(
             office_table.insert(),
-            [{"tenant_id": tid, **asdict(store.office)}],
+            [{"tenant_id": tid, **{key: value for key, value in asdict(store.office).items() if key != "id"}}],
         )
+        if store.office_locations:
+            await conn.execute(office_locations_table.insert(), [
+                _with_tenant({key: value for key, value in asdict(item).items() if key in {"id", "name", "latitude", "longitude", "radius_meters"}}, tid)
+                for item in store.office_locations.values()
+            ])
         await conn.execute(calendar_settings_table.insert(), [{"tenant_id": tid, **asdict(store.calendar)}])
         if store.invitations:
             await conn.execute(
