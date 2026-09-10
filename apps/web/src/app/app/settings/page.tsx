@@ -1,6 +1,6 @@
 "use client";
 
-import {useEffect,useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import {useRouter} from "next/navigation";
 import {Icon} from "../../../components/Icon";
 import {NotificationDialog,NotificationDialogState} from "../../../components/NotificationDialog";
@@ -54,6 +54,7 @@ export default function SettingsPage(){
   const router=useRouter();
   const [form,setForm]=useState<AttendanceSettings>(empty);
   const [locations,setLocations]=useState<AttendanceSettings[]>([]);
+  const [previewIndex,setPreviewIndex]=useState(0);
   const [locationMode,setLocationMode]=useState<"single"|"multiple"|null>(null);
   const [locationStep,setLocationStep]=useState<1|2|3>(1);
   const [mapsLink,setMapsLink]=useState("");
@@ -64,6 +65,7 @@ export default function SettingsPage(){
   const [calendarBusy,setCalendarBusy]=useState(false);
   const [calendarAccount,setCalendarAccount]=useState(false);
   const [calendars,setCalendars]=useState<GoogleCalendar[]>([]);
+  const previewTouchX=useRef<number|null>(null);
   const token=()=>localStorage.getItem("movon_user")||undefined;
   const notify=(type:NotificationDialogState["type"],title:string,message:string)=>setNotification({type,title,message});
   const mapsUrl=googleMapsOpenUrl(form.latitude,form.longitude);
@@ -229,6 +231,20 @@ export default function SettingsPage(){
     }
   }
 
+  function showLocation(index:number){
+    if(!locations.length)return;
+    const next=(index+locations.length)%locations.length;
+    const location=locations[next];
+    setPreviewIndex(next);setForm({...empty,...location});setMapsLink(googleMapsOpenUrl(location.latitude,location.longitude));
+  }
+
+  function finishPreviewSwipe(clientX:number){
+    if(previewTouchX.current===null)return;
+    const distance=clientX-previewTouchX.current;
+    if(Math.abs(distance)>45)showLocation(previewIndex+(distance<0?1:-1));
+    previewTouchX.current=null;
+  }
+
   return <>
     <NotificationDialog notification={notification} onClose={()=>setNotification(null)}/>
     <section className="page-heading">
@@ -289,15 +305,15 @@ export default function SettingsPage(){
 
             <section className="registered-locations" aria-labelledby="registered-locations-title">
               <header><div><p className="eyebrow">Daftar aktif</p><h3 id="registered-locations-title">Lokasi terdaftar <span>{locations.length}</span></h3><small>Klik lokasi untuk melihat titik dan radiusnya di panel preview.</small></div><button type="button" className="secondary-button" onClick={()=>chooseLocationMode(locations.length>0?"multiple":"single")}>+ Tambah lokasi</button></header>
-              <div className="registered-location-grid">{locations.map(location=><button type="button" key={location.id||location.name} className={form.id===location.id?"selected":""} onClick={()=>{setForm({...empty,...location});setMapsLink(googleMapsOpenUrl(location.latitude,location.longitude))}}><span className="registered-pin"><Icon name="pin"/></span><span><b>{location.name}</b><small>{location.latitude}, {location.longitude}</small><small>Radius check-in {location.radius_meters} m</small></span>{location.id==="office-default"&&<em>Utama</em>}<i>›</i></button>)}</div>
+              <div className="registered-location-grid">{locations.map((location,index)=><button type="button" key={location.id||location.name} className={form.id===location.id?"selected":""} onClick={()=>showLocation(index)}><span className="registered-pin"><Icon name="pin"/></span><span><b>{location.name}</b><small>{location.latitude}, {location.longitude}</small><small>Radius check-in {location.radius_meters} m</small></span>{location.id==="office-default"&&<em>Utama</em>}<i>›</i></button>)}</div>
               {!locations.length&&<div className="registered-empty"><span><Icon name="pin"/></span><div><b>Belum ada lokasi kerja</b><small>Pilih metode di atas untuk menambahkan lokasi pertama.</small></div></div>}
             </section>
           </article>
 
-          <aside className="panel settings-side">
-            <p className="eyebrow">Preview</p>
-            <h2>{form.name||"Lokasi kantor"}</h2>
-            <div className="maps-frame">
+          <aside className="panel settings-side location-carousel" onTouchStart={event=>{previewTouchX.current=event.touches[0].clientX}} onTouchEnd={event=>finishPreviewSwipe(event.changedTouches[0].clientX)}>
+            <div className="carousel-head"><div><p className="eyebrow">Preview lokasi</p><span>{locations.length?`${previewIndex+1} dari ${locations.length}`:"Lokasi baru"}</span></div>{locations.length>1&&<div className="carousel-arrows"><button type="button" aria-label="Lokasi sebelumnya" onClick={()=>showLocation(previewIndex-1)}>←</button><button type="button" aria-label="Lokasi berikutnya" onClick={()=>showLocation(previewIndex+1)}>→</button></div>}</div>
+            <div className="carousel-title"><h2>{form.name||"Lokasi kantor"}</h2>{form.id==="office-default"&&<em>Lokasi utama</em>}</div>
+            <div className="maps-frame" key={`${form.latitude}-${form.longitude}`}>
               <iframe title={`Peta ${form.name}`} src={embedUrl} loading="lazy" referrerPolicy="no-referrer-when-downgrade"/>
             </div>
             <dl className="settings-preview">
@@ -318,6 +334,8 @@ export default function SettingsPage(){
                 <small>Perubahan langsung dipakai pada check-in berikutnya.</small>
               </span>
             </div>
+            {locations.length>1&&<div className="carousel-dots" aria-label="Pilih lokasi">{locations.map((location,index)=><button type="button" key={location.id||index} className={index===previewIndex?"active":""} aria-label={`Lihat ${location.name}`} onClick={()=>showLocation(index)}/>)}</div>}
+            {locations.length>1&&<small className="swipe-hint">Geser ke kiri atau kanan untuk melihat lokasi lainnya</small>}
           </aside>
         </section>
 
