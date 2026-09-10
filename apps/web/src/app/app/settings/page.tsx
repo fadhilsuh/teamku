@@ -284,9 +284,14 @@ export default function SettingsPage(){
 
             {locationStep===3&&<div className="location-review-step">
               <div className="setup-success"><span>✓</span><div><b>{locationMode==="single"?"Lokasi utama berhasil diaktifkan":"Lokasi berhasil ditambahkan"}</b><small>{locationMode==="single"?"Selanjutnya, tetapkan lokasi ini dari profil karyawan.":"Kamu dapat menambahkan lokasi berikutnya atau menyelesaikan setup."}</small></div></div>
-              <div className="location-list"><div><b>{locations.length} lokasi kerja</b><small>Pilih lokasi dari profil karyawan untuk menentukan geofence mereka.</small></div>{locations.map(location=><article key={location.id||location.name}><span><Icon name="pin"/></span><div><b>{location.name}</b><small>Radius {location.radius_meters} m</small></div>{location.id==="office-default"&&<em>Utama</em>}</article>)}</div>
               <div className="step-navigation">{locationMode==="multiple"&&<button type="button" className="secondary-button" onClick={addAnotherLocation}>+ Tambah lokasi berikutnya</button>}<button type="button" className="primary-action auto-width" onClick={()=>{setLocationMode(null);setLocationStep(1)}}>Selesai</button></div>
             </div>}
+
+            <section className="registered-locations" aria-labelledby="registered-locations-title">
+              <header><div><p className="eyebrow">Daftar aktif</p><h3 id="registered-locations-title">Lokasi terdaftar <span>{locations.length}</span></h3><small>Klik lokasi untuk melihat titik dan radiusnya di panel preview.</small></div><button type="button" className="secondary-button" onClick={()=>chooseLocationMode(locations.length>0?"multiple":"single")}>+ Tambah lokasi</button></header>
+              <div className="registered-location-grid">{locations.map(location=><button type="button" key={location.id||location.name} className={form.id===location.id?"selected":""} onClick={()=>{setForm({...empty,...location});setMapsLink(googleMapsOpenUrl(location.latitude,location.longitude))}}><span className="registered-pin"><Icon name="pin"/></span><span><b>{location.name}</b><small>{location.latitude}, {location.longitude}</small><small>Radius check-in {location.radius_meters} m</small></span>{location.id==="office-default"&&<em>Utama</em>}<i>›</i></button>)}</div>
+              {!locations.length&&<div className="registered-empty"><span><Icon name="pin"/></span><div><b>Belum ada lokasi kerja</b><small>Pilih metode di atas untuk menambahkan lokasi pertama.</small></div></div>}
+            </section>
           </article>
 
           <aside className="panel settings-side">
