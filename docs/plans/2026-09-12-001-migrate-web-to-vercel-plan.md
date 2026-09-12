@@ -33,6 +33,9 @@ Diverifikasi langsung dari kode dan dari menjalankan build, bukan asumsi:
 - F7. `package-lock.json` **tidak sinkron** dengan `package.json`; `npm ci` gagal. Tidak pernah ketahuan karena `Dockerfile` memakai `npm install` dan bahkan tidak menyalin lockfile. Vercel memakai `npm ci` → build akan gagal total.
 - F8. Tidak ada konfigurasi maupun dependency ESLint, sehingga `npm run lint` membuka prompt setup interaktif dan tidak pernah benar-benar berfungsi — termasuk perintah di README.
 - F9. `next lint` dan `next build` **tidak bisa dibedakan**: keduanya melaporkan `phase-production-build` dan `NODE_ENV=production`.
+- F10. **Koreksi atas dugaan awal.** `teamku.onrender.com` adalah **web Next.js**, bukan API. API-nya publik terpisah di `teamku-api.onrender.com` (diverifikasi: `/health/live` 200, openapi 43 path, identik dengan yang dilayani proxy web). Topologi Render sekarang = web mem-proxy ke API, persis pola yang dipertahankan di Vercel.
+- F11. Vercel **menolak men-deploy Next 15.1.2** karena bypass otorisasi middleware yang diketahui. App ini tidak punya middleware sehingga paparan nyatanya rendah, tapi blokirnya tanpa syarat. Dinaikkan ke 15.5.25.
+- F12. Region default deployment adalah `iad1` (Washington DC) — merutekan user Indonesia lewat AS untuk mencapai API di Jakarta. Dipindah ke `sin1` lewat `vercel.json`.
 
 ## Key Technical Decisions
 
@@ -136,8 +139,27 @@ Verifikasi, seluruhnya sudah dijalankan dan lulus:
 ## Status
 
 - [x] Fase 1 — perubahan kode, terverifikasi lewat build
-- [ ] Fase 2 — setup Vercel (butuh akses dashboard)
+- [x] Fase 2 — project Vercel dibuat dan ter-deploy ke production
 - [ ] Fase 3 — deploy API di Biznet (butuh akses server)
+
+### Kondisi terpasang
+
+| Item | Nilai |
+|---|---|
+| Project | `movon/teamku-web` |
+| Production | `https://teamku-web.vercel.app`, `https://teamku-web-movon.vercel.app` |
+| Region | `sin1` (diverifikasi di output build) |
+| Next.js | 15.5.25 |
+| `MOVON_API_ORIGIN` | `https://teamku-api.onrender.com` — **sementara**, sampai Biznet siap |
+
+Origin API sengaja diarahkan ke Render dulu supaya FE langsung berfungsi. Saat API Biznet hidup, cukup ubah satu env var lalu redeploy — tidak ada perubahan kode.
+
+### Yang masih terbuka
+
+1. **Deployment Protection.** Production ada di balik Vercel Authentication (kebijakan tim movon), jadi belum bisa diakses publik maupun diverifikasi lewat curl. Perlu keputusan: matikan proteksi untuk production, atau pasang domain custom — pada Standard Protection, domain custom tetap publik sementara URL `*.vercel.app` tetap terlindungi.
+2. **Env var Preview belum ter-set.** CLI menolak menambah env Preview untuk semua branch (`git_branch_required` meski argumen branch dihilangkan sesuai petunjuknya sendiri), dan varian per-branch gagal karena project belum tersambung ke Git. Tambahkan lewat dashboard, atau setelah Git tersambung.
+3. **Git belum tersambung.** Deploy sekarang lewat CLI. Setelah repo disambungkan, set Root Directory `apps/web`, Build Command `npm run build`, dan Ignored Build Step (Fase 2 langkah 5).
+4. **`MOVON_APP_BASE_URL` di API Render** masih menunjuk `teamku.onrender.com`, jadi tautan undangan dan reset password dari FE Vercel akan mengarah ke domain Render. Perlu diubah di sisi API.
 
 ## Verifikasi Cutover
 
