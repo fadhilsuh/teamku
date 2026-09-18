@@ -150,16 +150,16 @@ Verifikasi, seluruhnya sudah dijalankan dan lulus:
 | Production | `https://teamku-web.vercel.app`, `https://teamku-web-movon.vercel.app` |
 | Region | `sin1` (diverifikasi di output build) |
 | Next.js | 15.5.25 |
-| `MOVON_API_ORIGIN` | `https://teamku-api.onrender.com` — **sementara**, sampai Biznet siap |
+| `MOVON_API_ORIGIN` | `https://api-teamku.movoncreative.dev` — Production, Preview, dan Development |
 
-Origin API sengaja diarahkan ke Render dulu supaya FE langsung berfungsi. Saat API Biznet hidup, cukup ubah satu env var lalu redeploy — tidak ada perubahan kode.
+Origin API sempat diarahkan ke Render (`https://teamku-api.onrender.com`) supaya FE langsung berfungsi, lalu dipindahkan ke `https://api-teamku.movoncreative.dev` pada 2026-09-18. Perpindahannya murni env var + redeploy: spesifikasi OpenAPI host baru dibandingkan byte-for-byte dengan `apps/api` di repo — 43 path, seluruh schema, nol perbedaan — jadi tidak ada satu baris kode klien pun yang berubah.
 
 ### Yang masih terbuka
 
 1. **Deployment Protection.** Production ada di balik Vercel Authentication (kebijakan tim movon), jadi belum bisa diakses publik maupun diverifikasi lewat curl. Perlu keputusan: matikan proteksi untuk production, atau pasang domain custom — pada Standard Protection, domain custom tetap publik sementara URL `*.vercel.app` tetap terlindungi.
-2. **Env var Preview belum ter-set.** CLI menolak menambah env Preview untuk semua branch (`git_branch_required` meski argumen branch dihilangkan sesuai petunjuknya sendiri), dan varian per-branch gagal karena project belum tersambung ke Git. Tambahkan lewat dashboard, atau setelah Git tersambung.
+2. ~~**Env var Preview belum ter-set.**~~ Selesai 2026-09-18. CLI tetap menolak (`git_branch_required`, bahkan dengan `--value ... --yes` seperti yang disarankan pesannya sendiri), jadi var Preview dibuat lewat REST API: `POST /v10/projects/<projectId>/env` dengan `target: ["preview"]` dan tanpa `gitBranch`. Pakai jalur itu lagi selama project belum tersambung ke Git.
 3. **Git belum tersambung.** Deploy sekarang lewat CLI. Setelah repo disambungkan, set Root Directory `apps/web`, Build Command `npm run build`, dan Ignored Build Step (Fase 2 langkah 5).
-4. **`MOVON_APP_BASE_URL` di API Render** masih menunjuk `teamku.onrender.com`, jadi tautan undangan dan reset password dari FE Vercel akan mengarah ke domain Render. Perlu diubah di sisi API.
+4. **Env di sisi API baru belum diverifikasi.** Di `https://api-teamku.movoncreative.dev`, `MOVON_APP_BASE_URL` harus menunjuk domain Vercel — kalau tidak, tautan undangan dan reset password mengarah ke domain yang salah. `MOVON_GOOGLE_REDIRECT_URI` juga harus `https://api-teamku.movoncreative.dev/api/v1/settings/calendar/google/callback` dan didaftarkan di Google Cloud Console, kalau tidak OAuth Calendar gagal di callback. Keduanya butuh akses ke host API.
 
 ## Verifikasi Cutover
 

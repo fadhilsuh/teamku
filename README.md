@@ -42,7 +42,7 @@ Repositori tetap monorepo; yang terpisah hanya target deploy-nya.
 | Bagian | Target | Catatan |
 |---|---|---|
 | `apps/web` | Vercel | Root Directory `apps/web`, Build Command `npm run build` |
-| `apps/api` | Server Biznet | Wajib **satu instance** |
+| `apps/api` | Server Biznet | Wajib **satu instance**. Instance yang dipakai `apps/web` saat ini: `https://api-teamku.movoncreative.dev` |
 
 Browser hanya berbicara ke domain Vercel. `apps/web/next.config.ts` mem-proxy
 `/api/*` ke `${MOVON_API_ORIGIN}/api/v1/*`, sehingga cookie sesi tetap
