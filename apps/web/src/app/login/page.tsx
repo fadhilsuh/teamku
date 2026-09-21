@@ -5,6 +5,7 @@ import {api} from "../../lib/api";
 import {waitForAuthTransition} from "../../lib/transition";
 import {AuthTransition} from "../../components/AuthTransition";
 import {AuthLink, AuthLinks} from "../../components/AuthShell";
+import {PasswordInput} from "../../components/PasswordInput";
 import {BrandLogo} from "../../components/BrandLogo";
 import {NotificationDialog,NotificationDialogState} from "../../components/NotificationDialog";
 
@@ -40,7 +41,7 @@ export default function Login(){
           <p className="muted">Gunakan akun kerja untuk melanjutkan.</p>
           <form className="stack" style={{marginTop:32}} onSubmit={submit}>
             <label>Email kerja<input disabled={busy} type="email" value={email} onChange={event=>setEmail(event.target.value)} autoComplete="username"/></label>
-            <label>Kata sandi<input disabled={busy} type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password"/></label>
+            <div className="auth-field"><label htmlFor="login-password">Kata sandi</label><PasswordInput id="login-password" name="password" disabled={busy} value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password"/></div>
             <button disabled={busy} type="submit">{busy?"Memverifikasi…":"Masuk ke Teamku →"}</button>
           </form>
           <AuthLinks>

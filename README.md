@@ -32,8 +32,20 @@ Attendance is browser verification, not liveness or anti-spoofing. A selfie is c
 
 ```bash
 cd apps/api && uv run pytest && uv run ruff check .
-cd apps/web && npm run lint && npm run build
+cd apps/web && npm test && npm run typecheck && npm run build
 ```
+
+Tes browser signup (Chromium, API dimock agar tidak membuat akun sungguhan):
+
+```bash
+cd apps/web
+npx playwright install chromium # sekali pada mesin baru
+npm run test:e2e
+```
+
+Tes mencakup validasi lokal, error FastAPI, email duplikat, serta pemulihan
+error jaringan pada viewport mobile. Gunakan Node.js 22.10+ (22.x sesuai engines)
+untuk unit test TypeScript dengan native type stripping.
 
 ## Deployment
 
