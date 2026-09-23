@@ -35,6 +35,32 @@ cd apps/api && uv run pytest && uv run ruff check .
 cd apps/web && npm run lint && npm run build
 ```
 
+## Deployment
+
+Repositori tetap monorepo; yang terpisah hanya target deploy-nya.
+
+| Bagian | Target | Catatan |
+|---|---|---|
+| `apps/web` | Vercel | Root Directory `apps/web`, Build Command `npm run build` |
+| `apps/api` | Server Biznet | Wajib **satu instance**. Instance yang dipakai `apps/web` saat ini: `https://api-teamku.movoncreative.dev` |
+
+Browser hanya berbicara ke domain Vercel. `apps/web/next.config.ts` mem-proxy
+`/api/*` ke `${MOVON_API_ORIGIN}/api/v1/*`, sehingga cookie sesi tetap
+first-party dan tidak ada CORS di jalur browser.
+
+`MOVON_API_ORIGIN` dibutuhkan saat **build**, bukan runtime — Next membakukan
+rewrite ke `routes-manifest.json`. Bila kosong, build tetap berhasil namun
+mem-proxy ke `localhost`. `apps/web/scripts/require-api-origin.mjs` berjalan
+sebagai `prebuild` dan menggagalkan build bila variabel kosong di Vercel/CI.
+Karena itu Build Command harus `npm run build`, bukan `next build`.
+
+API tidak boleh di-scale lebih dari satu instance: store-nya in-process dan
+`save_store` menulis ulang seluruh baris tenant tiap request mutasi, sehingga
+instance kedua akan saling menimpa data.
+
+Langkah lengkap ada di
+[docs/plans/2026-09-12-001-migrate-web-to-vercel-plan.md](docs/plans/2026-09-12-001-migrate-web-to-vercel-plan.md).
+
 ## Operations
 
 See [docs/architecture.md](docs/architecture.md), [docs/privacy-and-permissions.md](docs/privacy-and-permissions.md), and [docs/runbook.md](docs/runbook.md). In production configure PostgreSQL, Redis, private S3-compatible storage, HTTPS-only cookie settings, encryption at rest, a malware scanning adapter, and worker processes. The MVP intentionally leaves Indonesian tax/BPJS logic as transparent manual/configurable components rather than claiming compliance.
