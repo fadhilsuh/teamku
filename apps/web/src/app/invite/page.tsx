@@ -3,6 +3,7 @@ import {FormEvent, Suspense, useEffect, useState} from "react";
 import {useRouter, useSearchParams} from "next/navigation";
 import {api} from "../../lib/api";
 import {waitForAuthTransition} from "../../lib/transition";
+import {PasswordInput} from "../../components/PasswordInput";
 import {AuthTransition} from "../../components/AuthTransition";
 import {AuthLink, AuthLinks, AuthShell} from "../../components/AuthShell";
 import {NotificationDialog, NotificationDialogState} from "../../components/NotificationDialog";
@@ -59,7 +60,7 @@ function InviteForm() {
         subtitle={invite ? `Akun untuk ${invite.email} · ${invite.department}` : "Buka undangan dari email kerja Anda."}
       >
         <form className="stack" style={{marginTop: 32}} onSubmit={submit}>
-          <label>Kata sandi<input disabled={busy || !invite} type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" /></label>
+          <div className="auth-field"><label htmlFor="invite-password">Kata sandi</label><PasswordInput id="invite-password" name="password" disabled={busy || !invite} value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" /></div>
           <button disabled={busy || !invite} type="submit">{busy ? "Mengaktifkan…" : "Aktifkan akun →"}</button>
         </form>
         <AuthLinks>
