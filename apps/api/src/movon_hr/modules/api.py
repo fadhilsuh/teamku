@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -11,7 +11,7 @@ from math import asin, cos, radians, sin, sqrt
 from random import uniform
 from secrets import token_urlsafe
 from urllib.error import URLError
-from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 from uuid import uuid4
@@ -20,8 +20,9 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-from movon_hr.core.mailer import reset_outbox, send_email
+from movon_hr.core.mailer import dispatch_email, reset_outbox, send_email
 from movon_hr.core.policy_assistant import answer_question
 from movon_hr.core.security import (
     generate_temporary_password,
@@ -624,7 +625,7 @@ def leave_recipients(request: LeaveRequest) -> list[Employee]:
 def email_leave(recipients: list[Employee], subject: str, body: str) -> None:
     for recipient in recipients:
         if recipient.email:
-            send_email(recipient.email, subject, body)
+            dispatch_email(recipient.email, subject, body, kind="leave")
 
 
 def sync_leave_calendar(request: LeaveRequest, employee: Employee) -> None:
@@ -958,13 +959,14 @@ def emit_attendance_alert(kind: str, employee: Employee, policy: OfficeLocation)
     store.alert_receipts[key] = AlertReceipt(key, employee.id, kind, today)
     notify(employee.id, title, detail, "/app/attendance/today")
     if kind in {"missed_clock_in", "missed_clock_out"}:
-        send_email(
+        dispatch_email(
             employee.email,
             f"{title} — Teamku",
             (
                 f"Halo {employee.name},\n\n{detail}\n"
                 f"Buka presensi: {app_url('/app/attendance/today')}\n"
             ),
+            kind="attendance_alert",
         )
     if not policy.alert_managers:
         return
@@ -1406,7 +1408,8 @@ async def create_invite(
     )
     store.invitations[invitation.token] = invitation
     invite_url = app_url(f"/invite?token={invitation.token}")
-    send_email(
+    ok = await run_in_threadpool(
+        send_email,
         email,
         f"Undangan Teamku — {get_store().tenant_name}",
         (
@@ -1415,12 +1418,16 @@ async def create_invite(
             f"Aktifkan akun: {invite_url}\n"
             "Undangan berlaku 7 hari.\n"
         ),
+        kind="invite",
     )
     audit("invite.created", user, invitation.email)
+    if not ok:
+        audit("invite.email_failed", user, invitation.email)
     return {
         "email": invitation.email,
         "expires_at": invitation.expires_at,
         "invite_url": invite_url,
+        "email_status": "sent" if ok else "failed",
     }
 
 
@@ -1493,7 +1500,8 @@ async def forgot_password(payload: ForgotPassword) -> dict:
         )
         store.password_resets[reset.token] = reset
         reset_url = app_url(f"/reset-password?token={reset.token}")
-        send_email(
+        # Don't wait on the network: response time must not reveal the account exists.
+        dispatch_email(
             email,
             "Atur ulang kata sandi Teamku",
             (
@@ -1501,6 +1509,7 @@ async def forgot_password(payload: ForgotPassword) -> dict:
                 f"Gunakan tautan ini untuk mengatur ulang kata sandi: {reset_url}\n"
                 "Tautan berlaku 1 jam. Abaikan email ini jika Anda tidak memintanya.\n"
             ),
+            kind="password_reset",
         )
         audit("auth.password_reset_requested", user, user.id)
     return {"ok": True}

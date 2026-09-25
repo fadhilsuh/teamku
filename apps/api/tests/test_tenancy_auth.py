@@ -104,6 +104,7 @@ def test_invite_and_accept_creates_employee_in_same_tenant() -> None:
     )
     assert invited.status_code == 200
     assert last_email_to("sinta@undang.test") is not None
+    assert invited.json()["email_status"] == "sent"
     token = invited.json()["invite_url"].split("token=")[1]
 
     preview = client.get(f"/api/v1/invites/{token}")

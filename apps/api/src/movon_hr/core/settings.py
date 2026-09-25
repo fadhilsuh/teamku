@@ -1,4 +1,6 @@
-from pydantic import Field, model_validator
+from typing import Literal
+
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,11 +22,18 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str | None = None
+    mail_provider: Literal["console", "resend"] = "console"
+    resend_api_key: SecretStr | None = None
+    mail_from: str | None = None
 
     @model_validator(mode="after")
     def normalize_environment(self):
         if self.env and self.environment == "development":
             self.environment = self.env
+        if self.mail_provider == "resend" and not (self.resend_api_key and self.mail_from):
+            raise ValueError(
+                "MOVON_MAIL_PROVIDER=resend needs MOVON_RESEND_API_KEY and MOVON_MAIL_FROM"
+            )
         return self
 
 
