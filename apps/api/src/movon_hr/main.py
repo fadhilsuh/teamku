@@ -35,6 +35,9 @@ class TenantScopeMiddleware:
             bind_from_token(headers.get("x-demo-user") or _cookie_token(headers.get("cookie", "")))
         await self.app(scope, receive, send)
 
+
+# Without this, app INFO logs (mail results) never reach the container log.
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("movon_hr.persistence")
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
