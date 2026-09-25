@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -11,7 +11,7 @@ from math import asin, cos, radians, sin, sqrt
 from random import uniform
 from secrets import token_urlsafe
 from urllib.error import URLError
-from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 from uuid import uuid4

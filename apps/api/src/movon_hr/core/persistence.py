@@ -33,11 +33,11 @@ from movon_hr.core.tenancy import DEMO_TENANT_ID, bind_tenant, clear_registry, p
 from movon_hr.modules.api import (
     AlertReceipt,
     Attendance,
+    CalendarSettings,
     DemoStore,
     Employee,
     Invitation,
     LeaveRequest,
-    CalendarSettings,
     LocationEvent,
     Notification,
     OfficeLocation,
